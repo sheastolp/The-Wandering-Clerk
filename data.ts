@@ -160,3 +160,39 @@ export const merchantNames: string[] = [
   "Wobble", "Pruneface Yorik", "Tansy Ninefingers", "Old Corrin",
   "Tam Pockets", "Squint", "Nan Gullyfoot", "Kettle", "Sella Windrags",
 ];
+
+// Story snippets for the periodic "item lore" ambient event (see twitch.ts).
+// Templated with {owner} (the merchant hawking it), {item} (item name), and
+// {desc} (the item's short flavor description) — filled in at post time,
+// keyed by item type so a weapon gets a different flavor of story than a
+// trinket. These describe wares currently sitting on the stall.
+export const itemStoryTemplates: Record<string, string[]> = {
+  potion: [
+    "{owner} swears the {item} still smells faintly of the alchemist's cellar where it was brewed.",
+    "{owner} won't say where the {item} came from, only that it works — mostly.",
+    "According to {owner}, the {item} was mixed during a thunderstorm. Make of that what you will.",
+    "{owner} keeps the {item} wrapped in cloth on the cart, just in case it's more fragile than it looks.",
+    "{owner} has never actually watched the {item} get made, and has decided it's best not to ask.",
+  ],
+  weapon: [
+    "{owner} claims the {item} saw at least one real battle before it reached the stall.",
+    "The {item} on {owner}'s cart has a nick along the edge — {owner} tells a different story about it every time asked.",
+    "{owner} insists the {item} balances better than it has any right to for the price.",
+    "Nobody's quite sure who owned the {item} before {owner}, least of all {owner}.",
+    "{owner} keeps meaning to have the {item} properly appraised. Hasn't happened yet.",
+  ],
+  armor: [
+    "{owner} says the dent in the {item} was already there when it arrived — no questions asked, no answers given.",
+    "The {item} {owner} has on offer saw at least one battle before it ever reached the cart.",
+    "{owner} keeps meaning to have the {item} properly cleaned up. Hasn't happened yet.",
+    "{owner} found a second buckle sewn inside the {item}. Still hasn't figured out why.",
+    "The {item} on {owner}'s cart creaks a little in the cold. {owner} calls that character.",
+  ],
+  trinket: [
+    "{owner} isn't entirely sure what the {item} does, only that it seemed worth hauling to market.",
+    "{owner} claims the {item} is good luck. The Clerk's ledger shows no evidence either way.",
+    "Nobody quite remembers where {owner} got the {item}. {owner} isn't telling.",
+    "{owner} has caught themselves talking to the {item} more than once on the road. It has never answered.",
+    "{owner} keeps dropping the price on the {item} just to see if anyone will bite. So far, no one has.",
+  ],
+};
