@@ -33,6 +33,7 @@ const COMMAND_DEFS: { name: keyof typeof Commands; triggers: string[] }[] = [
   { name: "inventory", triggers: ["!inventory", "!inv"] },
   { name: "use", triggers: ["!use"] },
   { name: "drop", triggers: ["!drop"] },
+  { name: "sell", triggers: ["!sell"] },
   { name: "resetchar", triggers: ["!discharge"] },
   { name: "quests", triggers: ["!quests", "!questboard", "!board"] },
 ];
@@ -58,6 +59,7 @@ const COMMAND_FEATURE: Partial<Record<keyof typeof Commands, string>> = {
   inventory: "shop",
   use: "shop",
   drop: "shop",
+  sell: "shop",
   quests: "quests",
 };
 
