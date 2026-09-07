@@ -300,6 +300,25 @@ export async function drop(username: string, display: string, args: string[]): P
   return "@" + display + " the " + invItem.name + " is left behind on the road.";
 }
 
+export async function sell(username: string, display: string, args: string[]): Promise<string> {
+  const c = await Store.getCharacter(username);
+  if (!c) return "@" + display + " the ledger has no entry under your name yet.";
+  const needle = args.join(" ").trim();
+  if (!needle) return "@" + display + " sell what? Try !sell <item name>.";
+  const invItem = Inventory.find(c, needle);
+  if (!invItem) {
+    const have = c.inventory.length ? c.inventory.map((it) => it.name).join(", ") : "(nothing)";
+    return "@" + display + " nothing in your pack matches \"" + needle + "\". You carry: " + have;
+  }
+  const sellPrice = Math.max(1, Math.floor(invItem.price / 2));
+  Inventory.removeOne(c, invItem);
+  c.gold += sellPrice;
+  await Store.saveCharacter(c);
+  const offers = await Store.getMerchantOffers();
+  return "@" + display + " " + c.name + " sells the " + invItem.name + " back to the stall for " + sellPrice +
+    " gold. " + Advisor.recommendNextAction(c, offers);
+}
+
 export async function resetchar(username: string, display: string, args: string[]): Promise<string> {
   const c = await Store.getCharacter(username);
   if (!c) return "@" + display + " there's no entry under your name for the Clerk to close.";
@@ -312,5 +331,5 @@ export async function resetchar(username: string, display: string, args: string[
 
 export const Commands: Record<string, (username: string, display: string, args: string[]) => Promise<string>> = {
   help, start, createchar, character, hunt, autohunt, rest, merchant,
-  coinpurse, buy, inventory, use, drop, resetchar, quests,
+  coinpurse, buy, inventory, use, drop, sell, resetchar, quests,
 };
