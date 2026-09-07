@@ -188,14 +188,20 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   }
 
   async function maybePostPeriodicUpdates() {
-    const lastAdRaw = await Store.getMeta("last_merchant_ad_at");
-    const lastAd = lastAdRaw ? parseInt(lastAdRaw, 10) : 0;
-    if (Date.now() - lastAd >= Merchant.AD_INTERVAL_MS) {
-      const offers = await Store.getMerchantOffers();
-      const offer = Merchant.pickAdOffer(offers);
-      const ad = Merchant.formatAd(offer);
-      for (const channel of channelUsers.keys()) queueSay(channel, ad);
-      await Store.setMeta("last_merchant_ad_at", String(Date.now()));
+    // Fully rerolls the stall's offers on a jittered ~8-12 minute cadence
+    // (matching the original codex script's Merchant.AD_INTERVAL_MS /
+    // AD_JITTER_MS), rather than just advertising whatever's already there.
+    const lastRestockRaw = await Store.getMeta("last_merchant_restock_at");
+    const lastRestock = lastRestockRaw ? parseInt(lastRestockRaw, 10) : 0;
+    const restockThreshold = Merchant.AD_INTERVAL_MS + Math.floor(Math.random() * Merchant.AD_JITTER_MS);
+    if (Date.now() - lastRestock >= restockThreshold) {
+      const offers = Merchant.rollOffers();
+      await Store.saveMerchantOffers(offers);
+      const desc = Merchant.describeOffers(offers);
+      const announcement = "🛒 The stall has turned over its wares! " + desc +
+        ". Say !buy <#|item name> to purchase, or !merchant to see it again later.";
+      for (const channel of channelUsers.keys()) queueSay(channel, announcement);
+      await Store.setMeta("last_merchant_restock_at", String(Date.now()));
     }
 
     const lastQuestRaw = await Store.getMeta("last_quest_refresh_at");
