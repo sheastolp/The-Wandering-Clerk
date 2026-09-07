@@ -287,6 +287,21 @@ export async function runForWindow(budgetMs: number): Promise<void> {
       }
       await Store.setMeta("last_item_story_at", String(Date.now()));
     }
+
+    // Gentle nudge for newcomers: every ~25-40 minutes, a soft reminder
+    // that !start / !enlist exists, for anyone who's been lurking without
+    // realizing there's a game going.
+    const lastNudgeRaw = await Store.getMeta("last_start_nudge_at");
+    const lastNudge = lastNudgeRaw ? parseInt(lastNudgeRaw, 10) : 0;
+    const nudgeThreshold = 25 * 60 * 1000 + Math.floor(Math.random() * 15 * 60 * 1000);
+    if (Date.now() - lastNudge >= nudgeThreshold) {
+      const nudge = "New around here? Say !start for a quick status check, or !enlist <name> " +
+        "(or !enlist random) to join in whenever you're ready. !help has the full charter if you're curious.";
+      for (const channel of channelUsers.keys()) {
+        if (flagsFor(channel).start_nudge !== false && liveChannels.has(channel)) queueSay(channel, nudge);
+      }
+      await Store.setMeta("last_start_nudge_at", String(Date.now()));
+    }
   }
 
   // Picks up channels onboarded via the one-click /onboard flow mid-run,
