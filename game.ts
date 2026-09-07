@@ -326,8 +326,19 @@ export const Advisor = {
 
   recommendNextAction(character: Character | null, offers: MerchantOffer[] | null): string {
     if (!character) return "Next: !enlist <name> (or !enlist random) to roll up a hero.";
-    if (character.hp <= 1) return "Next: !rest — you are barely standing.";
-    if (Advisor.isLowHp(character)) return "Next: !rest to patch up before your next fight.";
+
+    const potion = character.inventory.find((it) => it.type === "potion");
+
+    if (character.hp <= 1) {
+      return potion
+        ? "Next: !use " + potion.name + " to patch yourself up, or !rest — you are barely standing."
+        : "Next: !rest — you are barely standing.";
+    }
+    if (Advisor.isLowHp(character)) {
+      return potion
+        ? "Next: !use " + potion.name + " for a quick heal, or !rest to patch up before your next fight."
+        : "Next: !rest to patch up before your next fight.";
+    }
 
     const unequippedWeapon = character.inventory.find((it) =>
       it.type === "weapon" && (!character.equipped.weapon || (it.atkBonus ?? 0) > (character.equipped.weapon.atkBonus ?? 0)));

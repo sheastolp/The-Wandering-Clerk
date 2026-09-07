@@ -172,11 +172,13 @@ export async function rest(username: string, display: string): Promise<string> {
   const c = await Store.getCharacter(username);
   if (!c) return "@" + display + " you don't have a character yet.";
   const offers = await Store.getMerchantOffers();
-  if (c.hp >= c.hpMax) {
-    return "@" + display + " " + c.name + " is already at full health (" + c.hp + "/" + c.hpMax + "). " +
+  const REST_RESTORE_FRACTION = 0.8; // resting patches you up, but doesn't fully heal you
+  const target = Math.min(c.hpMax, Math.ceil(c.hpMax * REST_RESTORE_FRACTION));
+  if (c.hp >= target) {
+    return "@" + display + " " + c.name + " is already well-rested (" + c.hp + "/" + c.hpMax + "). " +
       Advisor.recommendNextAction(c, offers);
   }
-  c.hp = c.hpMax;
+  c.hp = target;
   await Store.saveCharacter(c);
   return "@" + display + " " + c.name + " rests and recovers to " + c.hp + "/" + c.hpMax + " HP. " +
     Advisor.recommendNextAction(c, offers);
