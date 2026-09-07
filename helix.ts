@@ -124,6 +124,26 @@ export async function sendChatMessage(broadcasterId: string, senderId: string, t
   }
 }
 
+// Checks which of the given channels are currently live, in a single
+// batched call (Twitch's Get Streams endpoint accepts multiple
+// user_login params at once). Used to keep the Clerk's unprompted,
+// periodic chat lines quiet in channels that aren't streaming.
+export async function getLiveChannels(logins: string[]): Promise<Set<string>> {
+  if (!logins.length) return new Set();
+  const params = logins.map((l) => `user_login=${encodeURIComponent(l)}`).join("&");
+  const res = await helixFetch(`${BASE}/streams?${params}`);
+  if (!res.ok) {
+    console.error("getLiveChannels failed:", res.status, await res.text());
+    return new Set();
+  }
+  const json = await res.json();
+  const live = new Set<string>();
+  for (const stream of json.data || []) {
+    if (stream.user_login) live.add(String(stream.user_login).toLowerCase());
+  }
+  return live;
+}
+
 // -----------------------------------------------------------------------
 // One-click broadcaster onboarding (Authorization Code flow). A broadcaster
 // clicking the /onboard link authorizes just the channel:bot scope; we
