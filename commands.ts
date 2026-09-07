@@ -78,11 +78,21 @@ export async function createchar(username: string, display: string, args: string
     character.race.name + " " + character.cls.name + "! " + Rules.sheetLine(character) + ". " + Advisor.recommendNextAction(character, offers);
 }
 
-export async function character(username: string, display: string): Promise<string> {
-  const c = await Store.getCharacter(username);
-  if (!c) return "@" + display + " the ledger has no entry under your name yet. Say !enlist <name> or !enlist random to begin.";
-  const offers = await Store.getMerchantOffers();
-  return "@" + display + " The ledger reads: " + Rules.sheetLine(c) + " " + Advisor.recommendNextAction(c, offers);
+export async function character(username: string, display: string, args: string[]): Promise<string> {
+  const targetArg = (args[0] || "").replace(/^@/, "").trim();
+
+  if (!targetArg) {
+    const c = await Store.getCharacter(username);
+    if (!c) return "@" + display + " the ledger has no entry under your name yet. Say !enlist <name> or !enlist random to begin.";
+    const offers = await Store.getMerchantOffers();
+    return "@" + display + " The ledger reads: " + Rules.sheetLine(c) + " " + Advisor.recommendNextAction(c, offers);
+  }
+
+  // Looking up someone else's entry — targetArg is their Twitch username
+  // (how records are keyed), not their in-game character name.
+  const target = await Store.getCharacter(targetArg);
+  if (!target) return "@" + display + " no ledger entry found for \"" + targetArg + "\".";
+  return "@" + display + " " + target.name + "'s ledger entry: " + Rules.sheetLine(target);
 }
 
 export async function hunt(username: string, display: string, args: string[]): Promise<string> {
