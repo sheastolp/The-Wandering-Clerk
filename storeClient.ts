@@ -112,3 +112,15 @@ export async function setMeta(key: string, value: string): Promise<void> {
   const res = await apiFetch(`/api/meta/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value }) });
   if (!res.ok) console.error("setMeta failed:", res.status, await res.text());
 }
+
+// Feature toggles set from the moderator-locked /admin panel on Val Town.
+// Keys here must stay in sync with FEATURE_DEFS in the Val Town main.ts.
+const FEATURE_KEYS = ["characters", "combat", "shop", "quests", "merchant_ads", "quest_ads", "item_lore"];
+
+export async function getFeatureFlags(): Promise<Record<string, boolean>> {
+  const raw = await getMeta("feature_flags");
+  const stored = raw ? JSON.parse(raw) : {};
+  const flags: Record<string, boolean> = {};
+  for (const key of FEATURE_KEYS) flags[key] = stored[key] !== false; // default: enabled
+  return flags;
+}

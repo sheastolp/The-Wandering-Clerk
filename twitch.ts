@@ -42,6 +42,25 @@ for (const def of COMMAND_DEFS) {
   for (const trigger of def.triggers) triggerMap.set(trigger, def.name);
 }
 
+// Which feature-flag section (see the /admin panel) gates each command.
+// Commands not listed here (!help, !start, the !clerk* admin commands) are
+// never gated.
+const COMMAND_FEATURE: Partial<Record<keyof typeof Commands, string>> = {
+  createchar: "characters",
+  character: "characters",
+  resetchar: "characters",
+  hunt: "combat",
+  autohunt: "combat",
+  rest: "combat",
+  merchant: "shop",
+  buy: "shop",
+  coinpurse: "shop",
+  inventory: "shop",
+  use: "shop",
+  drop: "shop",
+  quests: "quests",
+};
+
 const ADMIN_TRIGGERS = new Set(["!clerkjoin", "!clerkleave", "!clerkchannels"]);
 
 const SEND_DELAY_MS = 1500;
@@ -61,6 +80,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   let sessionId: string | null = null;
   let botUser: HelixUser | null = null;
   let lastChannelSyncAt = 0;
+  let featureFlags: Record<string, boolean> = {};
   const channelUsers = new Map<string, HelixUser>();
   const outbox: { channel: string; text: string }[] = [];
   let draining = false;
@@ -104,6 +124,11 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   async function handleGameCommand(channel: string, username: string, trigger: string, args: string[]) {
     const commandName = triggerMap.get(trigger);
     if (!commandName) return;
+    const featureKey = COMMAND_FEATURE[commandName];
+    if (featureKey && featureFlags[featureKey] === false) {
+      queueSay(channel, `@${username} that part of the Clerk's ledger is closed for now — check back later.`);
+      return;
+    }
     try {
       const reply = await Commands[commandName](username, username, args);
       if (reply) queueSay(channel, reply);
@@ -188,47 +213,55 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   }
 
   async function maybePostPeriodicUpdates() {
+    featureFlags = await Store.getFeatureFlags();
+
     // Fully rerolls the stall's offers on a jittered ~8-12 minute cadence
     // (matching the original codex script's Merchant.AD_INTERVAL_MS /
     // AD_JITTER_MS), rather than just advertising whatever's already there.
-    const lastRestockRaw = await Store.getMeta("last_merchant_restock_at");
-    const lastRestock = lastRestockRaw ? parseInt(lastRestockRaw, 10) : 0;
-    const restockThreshold = Merchant.AD_INTERVAL_MS + Math.floor(Math.random() * Merchant.AD_JITTER_MS);
-    if (Date.now() - lastRestock >= restockThreshold) {
-      const offers = Merchant.rollOffers();
-      await Store.saveMerchantOffers(offers);
-      const desc = Merchant.describeOffers(offers);
-      const announcement = "🛒 The stall has turned over its wares! " + desc +
-        ". Say !buy <#|item name> to purchase, or !merchant to see it again later.";
-      for (const channel of channelUsers.keys()) queueSay(channel, announcement);
-      await Store.setMeta("last_merchant_restock_at", String(Date.now()));
+    if (featureFlags.merchant_ads !== false) {
+      const lastRestockRaw = await Store.getMeta("last_merchant_restock_at");
+      const lastRestock = lastRestockRaw ? parseInt(lastRestockRaw, 10) : 0;
+      const restockThreshold = Merchant.AD_INTERVAL_MS + Math.floor(Math.random() * Merchant.AD_JITTER_MS);
+      if (Date.now() - lastRestock >= restockThreshold) {
+        const offers = Merchant.rollOffers();
+        await Store.saveMerchantOffers(offers);
+        const desc = Merchant.describeOffers(offers);
+        const announcement = "🛒 The stall has turned over its wares! " + desc +
+          ". Say !buy <#|item name> to purchase, or !merchant to see it again later.";
+        for (const channel of channelUsers.keys()) queueSay(channel, announcement);
+        await Store.setMeta("last_merchant_restock_at", String(Date.now()));
+      }
     }
 
-    const lastQuestRaw = await Store.getMeta("last_quest_refresh_at");
-    const lastQuest = lastQuestRaw ? parseInt(lastQuestRaw, 10) : 0;
-    if (Date.now() - lastQuest >= QuestBoard.BOARD_REFRESH_MS) {
-      const board = QuestBoard.rollBoard();
-      await Store.saveQuestBoard(board);
-      const desc = QuestBoard.describeBoard(board);
-      const announcement = "📜 The Clerk posts a fresh set of bounties: " + desc +
-        ". Say !hunt <monster name> to take one on, or !quests to check your progress.";
-      for (const channel of channelUsers.keys()) queueSay(channel, announcement);
-      await Store.setMeta("last_quest_refresh_at", String(Date.now()));
+    if (featureFlags.quest_ads !== false) {
+      const lastQuestRaw = await Store.getMeta("last_quest_refresh_at");
+      const lastQuest = lastQuestRaw ? parseInt(lastQuestRaw, 10) : 0;
+      if (Date.now() - lastQuest >= QuestBoard.BOARD_REFRESH_MS) {
+        const board = QuestBoard.rollBoard();
+        await Store.saveQuestBoard(board);
+        const desc = QuestBoard.describeBoard(board);
+        const announcement = "📜 The Clerk posts a fresh set of bounties: " + desc +
+          ". Say !hunt <monster name> to take one on, or !quests to check your progress.";
+        for (const channel of channelUsers.keys()) queueSay(channel, announcement);
+        await Store.setMeta("last_quest_refresh_at", String(Date.now()));
+      }
     }
 
     // Ambient flavor: every ~12-18 minutes, the Clerk shares a little story
     // about one of the wares currently sitting on the stall.
-    const lastStoryRaw = await Store.getMeta("last_item_story_at");
-    const lastStory = lastStoryRaw ? parseInt(lastStoryRaw, 10) : 0;
-    const storyThreshold = 12 * 60 * 1000 + Math.floor(Math.random() * 6 * 60 * 1000);
-    if (Date.now() - lastStory >= storyThreshold) {
-      const currentOffers = await Store.getMerchantOffers();
-      const pickedOffer = ItemLore.pickOffer(currentOffers);
-      if (pickedOffer) {
-        const story = "📖 " + ItemLore.story(pickedOffer);
-        for (const channel of channelUsers.keys()) queueSay(channel, story);
+    if (featureFlags.item_lore !== false) {
+      const lastStoryRaw = await Store.getMeta("last_item_story_at");
+      const lastStory = lastStoryRaw ? parseInt(lastStoryRaw, 10) : 0;
+      const storyThreshold = 12 * 60 * 1000 + Math.floor(Math.random() * 6 * 60 * 1000);
+      if (Date.now() - lastStory >= storyThreshold) {
+        const currentOffers = await Store.getMerchantOffers();
+        const pickedOffer = ItemLore.pickOffer(currentOffers);
+        if (pickedOffer) {
+          const story = "📖 " + ItemLore.story(pickedOffer);
+          for (const channel of channelUsers.keys()) queueSay(channel, story);
+        }
+        await Store.setMeta("last_item_story_at", String(Date.now()));
       }
-      await Store.setMeta("last_item_story_at", String(Date.now()));
     }
   }
 
