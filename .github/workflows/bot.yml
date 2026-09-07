@@ -1,0 +1,33 @@
+name: Hunt and Hoard Bot
+
+on:
+  schedule:
+    # Runs at :17 past every 6th hour (offset from the top of the hour,
+    # since exactly-on-the-hour schedules are more likely to be delayed
+    # under GitHub's load). Each run lasts up to ~5h45m (see bot.ts), so
+    # the next scheduled run picks up shortly after the previous one ends.
+    - cron: "17 */6 * * *"
+  workflow_dispatch: {} # lets you manually trigger a run from the Actions tab, for testing
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355 # a bit under GitHub's 6-hour (360 min) hard cap
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run the bot
+        env:
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_BOT_ACCESS_TOKEN: ${{ secrets.TWITCH_BOT_ACCESS_TOKEN }}
+          TWITCH_BOT_USERNAME: ${{ secrets.TWITCH_BOT_USERNAME }}
+          TWITCH_CHANNEL: ${{ secrets.TWITCH_CHANNEL }}
+          VALTOWN_API_BASE_URL: ${{ secrets.VALTOWN_API_BASE_URL }}
+          VALTOWN_API_SECRET: ${{ secrets.VALTOWN_API_SECRET }}
+        run: deno run --allow-net --allow-env bot.ts

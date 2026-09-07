@@ -1,0 +1,299 @@
+// =============================================================================
+//  twitch.ts — connects to Twitch chat over EventSub WebSocket, dispatches
+//  !commands, and periodically posts merchant ads / quest board updates /
+//  checks for newly onboarded channels — all within one bounded time
+//  window (see runForWindow), since GitHub Actions kills any job after 6
+//  hours. bot.ts calls this once per scheduled workflow run.
+// =============================================================================
+import { Commands } from "./commands.ts";
+import { Merchant } from "./game.ts";
+import { QuestBoard } from "./quests.ts";
+import * as Store from "./storeClient.ts";
+import { roleFromBadges, isModOrBroadcaster, Badge } from "./permissions.ts";
+import { getUser, createChatMessageSubscription, sendChatMessage, HelixUser } from "./helix.ts";
+
+const BOT_USERNAME = (Deno.env.get("TWITCH_BOT_USERNAME") || "").toLowerCase();
+const HOME_CHANNEL = (Deno.env.get("TWITCH_CHANNEL") || "").toLowerCase().replace(/^#/, "");
+
+if (!BOT_USERNAME || !HOME_CHANNEL) {
+  console.error("Missing TWITCH_BOT_USERNAME or TWITCH_CHANNEL env vars.");
+}
+
+const COMMAND_DEFS: { name: keyof typeof Commands; triggers: string[] }[] = [
+  { name: "help", triggers: ["!help"] },
+  { name: "start", triggers: ["!start"] },
+  { name: "createchar", triggers: ["!enlist"] },
+  { name: "character", triggers: ["!chars", "!ledger"] },
+  { name: "hunt", triggers: ["!hunt"] },
+  { name: "autohunt", triggers: ["!autohunt", "!auto"] },
+  { name: "rest", triggers: ["!rest"] },
+  { name: "merchant", triggers: ["!merchant", "!shop"] },
+  { name: "coinpurse", triggers: ["!coinpurse", "!purse"] },
+  { name: "buy", triggers: ["!buy"] },
+  { name: "inventory", triggers: ["!inventory", "!inv"] },
+  { name: "use", triggers: ["!use"] },
+  { name: "drop", triggers: ["!drop"] },
+  { name: "resetchar", triggers: ["!discharge"] },
+  { name: "quests", triggers: ["!quests", "!questboard", "!board"] },
+];
+
+const triggerMap = new Map<string, keyof typeof Commands>();
+for (const def of COMMAND_DEFS) {
+  for (const trigger of def.triggers) triggerMap.set(trigger, def.name);
+}
+
+const ADMIN_TRIGGERS = new Set(["!clerkjoin", "!clerkleave", "!clerkchannels"]);
+
+const SEND_DELAY_MS = 1500;
+const PERIODIC_CHECK_MS = 10 * 1000; // how often we check "is it time to post an ad / sync channels / is the budget up"
+const CHANNEL_SYNC_MS = 3 * 60 * 1000; // how often to check for newly onboarded channels
+
+export async function runForWindow(budgetMs: number): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+
+  let ws: WebSocket;
+  let sessionId: string | null = null;
+  let botUser: HelixUser | null = null;
+  let lastChannelSyncAt = 0;
+  const channelUsers = new Map<string, HelixUser>();
+  const outbox: { channel: string; text: string }[] = [];
+  let draining = false;
+
+  function queueSay(channel: string, text: string) {
+    const MAX = 480;
+    if (text.length <= MAX) {
+      outbox.push({ channel, text });
+    } else {
+      for (let i = 0; i < text.length; i += MAX) outbox.push({ channel, text: text.slice(i, i + MAX) });
+    }
+    drainOutbox();
+  }
+
+  async function drainOutbox() {
+    if (draining) return;
+    draining = true;
+    while (outbox.length) {
+      const { channel, text } = outbox.shift()!;
+      const broadcaster = channelUsers.get(channel);
+      if (broadcaster && botUser) {
+        await sendChatMessage(broadcaster.id, botUser.id, text);
+      }
+      await new Promise((r) => setTimeout(r, SEND_DELAY_MS));
+    }
+    draining = false;
+  }
+
+  async function joinChannel(loginName: string): Promise<boolean> {
+    const name = loginName.toLowerCase();
+    if (channelUsers.has(name)) return true;
+    if (!botUser || !sessionId) return false;
+    const user = await getUser(name);
+    if (!user) return false;
+    const ok = await createChatMessageSubscription(user.id, botUser.id, sessionId);
+    if (!ok) return false;
+    channelUsers.set(name, user);
+    return true;
+  }
+
+  async function handleGameCommand(channel: string, username: string, trigger: string, args: string[]) {
+    const commandName = triggerMap.get(trigger);
+    if (!commandName) return;
+    try {
+      const reply = await Commands[commandName](username, username, args);
+      if (reply) queueSay(channel, reply);
+    } catch (err) {
+      console.error(`Error running ${trigger} for ${username} in #${channel}:`, err);
+      queueSay(channel, `@${username} something went wrong running ${trigger} — try again in a moment.`);
+    }
+  }
+
+  async function handleAdminCommand(channel: string, username: string, badges: Badge[], trigger: string, args: string[]) {
+    const role = roleFromBadges(badges);
+    const allowed = isModOrBroadcaster(role);
+
+    if (trigger === "!clerkchannels") {
+      const channels = await Store.getChannels();
+      const list = [HOME_CHANNEL, ...channels].join(", ");
+      queueSay(channel, `@${username} the Clerk currently keeps ledgers open in: ${list}.`);
+      return;
+    }
+
+    if (!allowed) {
+      queueSay(channel, `@${username} only a moderator or the broadcaster may direct the Clerk's travels.`);
+      return;
+    }
+
+    const target = (args[0] || "").toLowerCase().replace(/^#/, "").trim();
+    if (!target) {
+      queueSay(channel, `@${username} which channel? Try "${trigger} <channel name>".`);
+      return;
+    }
+
+    if (trigger === "!clerkjoin") {
+      if (target === HOME_CHANNEL || channelUsers.has(target)) {
+        queueSay(channel, `@${username} the Clerk already keeps a ledger open in #${target}.`);
+        return;
+      }
+      const ok = await joinChannel(target);
+      if (!ok) {
+        queueSay(
+          channel,
+          `@${username} the Clerk couldn't set up a desk in #${target} — that channel's broadcaster needs to grant this bot's Client ID the "channel:bot" permission first (send them the /onboard link).`
+        );
+        return;
+      }
+      await Store.addChannel(target, username);
+      queueSay(channel, `@${username} very good — the Clerk has set up a desk in #${target}.`);
+    } else if (trigger === "!clerkleave") {
+      if (target === HOME_CHANNEL) {
+        queueSay(channel, `@${username} the Clerk's home ledger stays put — that one isn't up for removal here.`);
+        return;
+      }
+      if (!channelUsers.has(target)) {
+        queueSay(channel, `@${username} the Clerk isn't currently serving #${target}.`);
+        return;
+      }
+      await Store.removeChannel(target);
+      channelUsers.delete(target);
+      queueSay(
+        channel,
+        `@${username} understood — the Clerk will stop replying in #${target}. (The underlying Twitch subscription is left in place; remove it from the dev console if you want it fully revoked.)`
+      );
+    }
+  }
+
+  async function handleChatMessageEvent(event: any) {
+    const channel = (event.broadcaster_user_login || "").toLowerCase();
+    const username = (event.chatter_user_login || "").toLowerCase();
+    const text = String(event.message?.text || "").trim();
+    const badges: Badge[] = event.badges || [];
+
+    if (!channel || !username || !text.startsWith("!")) return;
+    if (botUser && username === botUser.login.toLowerCase()) return;
+
+    const [rawTrigger, ...args] = text.split(/\s+/);
+    const trigger = rawTrigger.toLowerCase();
+
+    if (ADMIN_TRIGGERS.has(trigger)) {
+      await handleAdminCommand(channel, username, badges, trigger, args);
+      return;
+    }
+    await handleGameCommand(channel, username, trigger, args);
+  }
+
+  async function maybePostPeriodicUpdates() {
+    const lastAdRaw = await Store.getMeta("last_merchant_ad_at");
+    const lastAd = lastAdRaw ? parseInt(lastAdRaw, 10) : 0;
+    if (Date.now() - lastAd >= Merchant.AD_INTERVAL_MS) {
+      const offers = await Store.getMerchantOffers();
+      const offer = Merchant.pickAdOffer(offers);
+      const ad = Merchant.formatAd(offer);
+      for (const channel of channelUsers.keys()) queueSay(channel, ad);
+      await Store.setMeta("last_merchant_ad_at", String(Date.now()));
+    }
+
+    const lastQuestRaw = await Store.getMeta("last_quest_refresh_at");
+    const lastQuest = lastQuestRaw ? parseInt(lastQuestRaw, 10) : 0;
+    if (Date.now() - lastQuest >= QuestBoard.BOARD_REFRESH_MS) {
+      const board = QuestBoard.rollBoard();
+      await Store.saveQuestBoard(board);
+      const desc = QuestBoard.describeBoard(board);
+      const announcement = "📜 The Clerk posts a fresh set of bounties: " + desc +
+        ". Say !hunt <monster name> to take one on, or !quests to check your progress.";
+      for (const channel of channelUsers.keys()) queueSay(channel, announcement);
+      await Store.setMeta("last_quest_refresh_at", String(Date.now()));
+    }
+  }
+
+  // Picks up channels onboarded via the one-click /onboard flow mid-run,
+  // without waiting for the next scheduled workflow to start.
+  async function syncChannels() {
+    const extraChannels = await Store.getChannels();
+    for (const channel of extraChannels) {
+      if (channelUsers.has(channel)) continue;
+      const ok = await joinChannel(channel);
+      if (ok) {
+        console.log(`Joined newly onboarded channel: #${channel}`);
+        queueSay(channel, `The Wandering Clerk has set up a desk here! Type !help to see everything the Clerk can do.`);
+      }
+    }
+  }
+
+  async function onSessionReady() {
+    botUser = await getUser(BOT_USERNAME);
+    if (!botUser) {
+      console.error("Could not resolve the bot's own Twitch user id for", BOT_USERNAME);
+      return;
+    }
+    const extraChannels = await Store.getChannels();
+    for (const channel of [HOME_CHANNEL, ...extraChannels]) {
+      const ok = await joinChannel(channel);
+      if (!ok) {
+        console.error(`Failed to subscribe to chat for #${channel} — has that broadcaster granted this Client ID the channel:bot permission?`);
+      }
+    }
+    lastChannelSyncAt = Date.now();
+    await maybePostPeriodicUpdates();
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearInterval(budgetTimer);
+      resolve();
+    };
+
+    ws = new WebSocket("wss://eventsub.wss.twitch.tv/ws");
+
+    ws.onmessage = (rawEvent) => {
+      let msg: any;
+      try {
+        msg = JSON.parse(String(rawEvent.data));
+      } catch (err) {
+        console.error("Failed to parse EventSub message:", err);
+        return;
+      }
+      const type = msg.metadata?.message_type;
+
+      if (type === "session_welcome") {
+        sessionId = msg.payload.session.id;
+        console.log("EventSub session established:", sessionId);
+        onSessionReady().catch((err) => console.error("onSessionReady error:", err));
+      } else if (type === "session_reconnect") {
+        console.log("EventSub asked us to reconnect — ending this run early; the next scheduled run will reconnect.");
+        try { ws.close(); } catch { /* ignore */ }
+      } else if (type === "notification") {
+        if (msg.metadata.subscription_type === "channel.chat.message") {
+          handleChatMessageEvent(msg.payload.event).catch((err) => console.error("handleChatMessageEvent error:", err));
+        }
+      } else if (type === "revocation") {
+        console.warn("An EventSub subscription was revoked:", msg.payload);
+      }
+    };
+
+    ws.onclose = () => {
+      console.warn("EventSub connection closed; ending this run.");
+      finish();
+    };
+
+    ws.onerror = (err) => {
+      console.error("EventSub socket error:", err);
+    };
+
+    const budgetTimer = setInterval(async () => {
+      if (Date.now() >= deadline) {
+        try { ws.close(); } catch { /* ignore */ }
+        await drainOutbox();
+        finish();
+        return;
+      }
+      if (botUser && sessionId && Date.now() - lastChannelSyncAt >= CHANNEL_SYNC_MS) {
+        lastChannelSyncAt = Date.now();
+        syncChannels().catch((err) => console.error("syncChannels error:", err));
+        maybePostPeriodicUpdates().catch((err) => console.error("maybePostPeriodicUpdates error:", err));
+      }
+    }, PERIODIC_CHECK_MS);
+  });
+}
