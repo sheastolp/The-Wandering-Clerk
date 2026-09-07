@@ -2,7 +2,7 @@
 //  game.ts — all the stateless game math and rules. Nothing in here talks
 //  to Twitch or SQLite; it only operates on the plain objects below.
 // =============================================================================
-import { races, classes, nameFirst, nameEpithet, xpThresholds, monsters, items, merchantNames, RaceDef, ClassDef, MonsterDef, ItemDef } from "./data.ts";
+import { races, classes, nameFirst, nameEpithet, xpThresholds, monsters, items, merchantNames, itemStoryTemplates, RaceDef, ClassDef, MonsterDef, ItemDef } from "./data.ts";
 
 export type { MonsterDef } from "./data.ts";
 
@@ -353,5 +353,26 @@ export const Advisor = {
       return "Next: !buy " + affordable.item.name + " — you can afford it (" + affordable.item.price + " gold) from " + affordable.merchant + ".";
     }
     return "Next: !hunt for more XP and gold, or !autohunt to chain fights automatically.";
+  },
+};
+
+// -----------------------------------------------------------------------
+// ItemLore — picks a random item currently on the merchant's stall and
+// spins a short ambient story about it, for the periodic "item lore" chat
+// event.
+// -----------------------------------------------------------------------
+export const ItemLore = {
+  pickOffer(offers: MerchantOffer[]): MerchantOffer | null {
+    if (!offers.length) return null;
+    return Util.pick(offers);
+  },
+
+  story(offer: MerchantOffer): string {
+    const templates = itemStoryTemplates[offer.item.type] || itemStoryTemplates["trinket"];
+    const template = Util.pick(templates);
+    return template
+      .split("{owner}").join(offer.merchant)
+      .split("{item}").join(offer.item.name)
+      .split("{desc}").join(offer.item.desc);
   },
 };

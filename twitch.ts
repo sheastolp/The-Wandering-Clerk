@@ -6,7 +6,7 @@
 //  hours. bot.ts calls this once per scheduled workflow run.
 // =============================================================================
 import { Commands } from "./commands.ts";
-import { Merchant } from "./game.ts";
+import { Merchant, ItemLore } from "./game.ts";
 import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
 import { roleFromBadges, isModOrBroadcaster, Badge } from "./permissions.ts";
@@ -214,6 +214,21 @@ export async function runForWindow(budgetMs: number): Promise<void> {
         ". Say !hunt <monster name> to take one on, or !quests to check your progress.";
       for (const channel of channelUsers.keys()) queueSay(channel, announcement);
       await Store.setMeta("last_quest_refresh_at", String(Date.now()));
+    }
+
+    // Ambient flavor: every ~12-18 minutes, the Clerk shares a little story
+    // about one of the wares currently sitting on the stall.
+    const lastStoryRaw = await Store.getMeta("last_item_story_at");
+    const lastStory = lastStoryRaw ? parseInt(lastStoryRaw, 10) : 0;
+    const storyThreshold = 12 * 60 * 1000 + Math.floor(Math.random() * 6 * 60 * 1000);
+    if (Date.now() - lastStory >= storyThreshold) {
+      const currentOffers = await Store.getMerchantOffers();
+      const pickedOffer = ItemLore.pickOffer(currentOffers);
+      if (pickedOffer) {
+        const story = "📖 " + ItemLore.story(pickedOffer);
+        for (const channel of channelUsers.keys()) queueSay(channel, story);
+      }
+      await Store.setMeta("last_item_story_at", String(Date.now()));
     }
   }
 
