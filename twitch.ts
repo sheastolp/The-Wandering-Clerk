@@ -10,7 +10,7 @@ import { Merchant } from "./game.ts";
 import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
 import { roleFromBadges, isModOrBroadcaster, Badge } from "./permissions.ts";
-import { getUser, createChatMessageSubscription, sendChatMessage, HelixUser } from "./helix.ts";
+import { getUser, createChatMessageSubscription, sendChatMessage, refreshAccessToken, HelixUser } from "./helix.ts";
 
 const BOT_USERNAME = (Deno.env.get("TWITCH_BOT_USERNAME") || "").toLowerCase();
 const HOME_CHANNEL = (Deno.env.get("TWITCH_CHANNEL") || "").toLowerCase().replace(/^#/, "");
@@ -50,6 +50,12 @@ const CHANNEL_SYNC_MS = 3 * 60 * 1000; // how often to check for newly onboarded
 
 export async function runForWindow(budgetMs: number): Promise<void> {
   const deadline = Date.now() + budgetMs;
+  const TOKEN_REFRESH_MS = 3 * 60 * 60 * 1000; // proactively refresh every 3h so a 4h token never expires mid-run
+
+  // Get a known-fresh token before we even try to connect — the token
+  // saved in secrets could easily be hours old by the time this run starts.
+  await refreshAccessToken();
+  let lastTokenRefreshAt = Date.now();
 
   let ws: WebSocket;
   let sessionId: string | null = null;
@@ -293,6 +299,10 @@ export async function runForWindow(budgetMs: number): Promise<void> {
         lastChannelSyncAt = Date.now();
         syncChannels().catch((err) => console.error("syncChannels error:", err));
         maybePostPeriodicUpdates().catch((err) => console.error("maybePostPeriodicUpdates error:", err));
+      }
+      if (Date.now() - lastTokenRefreshAt >= TOKEN_REFRESH_MS) {
+        lastTokenRefreshAt = Date.now();
+        refreshAccessToken().catch((err) => console.error("proactive refreshAccessToken error:", err));
       }
     }, PERIODIC_CHECK_MS);
   });
