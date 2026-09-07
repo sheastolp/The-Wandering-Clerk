@@ -109,7 +109,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
       if (reply) queueSay(channel, reply);
     } catch (err) {
       console.error(`Error running ${trigger} for ${username} in #${channel}:`, err);
-      queueSay(channel, `@${username} something went wrong running ${trigger} — try again in a moment.`);
+      queueSay(channel, `@${username} the Clerk's quill slips and the ink smudges running ${trigger} — try again in a moment.`);
     }
   }
 
@@ -131,7 +131,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
 
     const target = (args[0] || "").toLowerCase().replace(/^#/, "").trim();
     if (!target) {
-      queueSay(channel, `@${username} which channel? Try "${trigger} <channel name>".`);
+      queueSay(channel, `@${username} to which town shall the Clerk travel? Try "${trigger} <channel name>".`);
       return;
     }
 
