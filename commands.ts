@@ -48,7 +48,7 @@ const HELP_TEXT =
   "!use <item> | !drop <item> | !discharge confirm to start over";
 
 export async function help(_username: string, display: string): Promise<string> {
-  return "@" + display + " " + HELP_TEXT;
+  return "@" + display + " " + HELP_TEXT + " Full guide: https://huntandhoardbot.val.run/commands";
 }
 
 export async function start(username: string, display: string): Promise<string> {
