@@ -44,6 +44,24 @@ export async function help(_username: string, display: string): Promise<string> 
   return "@" + display + " 📜 The Clerk keeps the full charter of commands sealed at this scroll: " + GUIDE_URL;
 }
 
+const LURK_LINES = [
+  " slips into the shadows at the back of the guildhall, cloak drawn — still within earshot of the bounty board.",
+  " takes a quiet seat in the corner booth, boots up on the table, one eye on the room.",
+  " melts into the tavern crowd, nursing a drink and watching the door.",
+  " retreats to the archive stacks to \"study,\" though the Clerk suspects a nap is more likely.",
+  " posts up by the hearth, hood low, content to let the other adventurers take the spotlight.",
+  " signs the guest ledger and disappears into the rafters like a proper rogue.",
+  " leans against the back wall near the notice board, present but unbothered.",
+  " ducks behind a stack of crates in the storeroom — technically still on guild grounds.",
+  " curls up with the guild cat by the window and goes very, very still.",
+  " steps into the scrying pool's reflection, watching from just out of frame.",
+];
+
+export async function lurk(_username: string, display: string): Promise<string> {
+  const line = LURK_LINES[Math.floor(Math.random() * LURK_LINES.length)];
+  return "@" + display + " 🥷" + line + " The Clerk marks you present in the ledger all the same.";
+}
+
 export async function start(username: string, display: string): Promise<string> {
   const c = await Store.getCharacter(username);
   if (!c) {
@@ -341,5 +359,5 @@ export async function resetchar(username: string, display: string, args: string[
 
 export const Commands: Record<string, (username: string, display: string, args: string[]) => Promise<string>> = {
   help, start, createchar, character, hunt, autohunt, rest, merchant,
-  coinpurse, buy, inventory, use, drop, sell, resetchar, quests,
+  coinpurse, buy, inventory, use, drop, sell, resetchar, quests, lurk,
 };
