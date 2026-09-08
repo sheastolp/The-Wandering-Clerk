@@ -36,6 +36,7 @@ const COMMAND_DEFS: { name: keyof typeof Commands; triggers: string[] }[] = [
   { name: "sell", triggers: ["!sell"] },
   { name: "resetchar", triggers: ["!discharge"] },
   { name: "quests", triggers: ["!quests", "!questboard", "!board"] },
+  { name: "lurk", triggers: ["!lurk"] },
 ];
 
 const triggerMap = new Map<string, keyof typeof Commands>();
