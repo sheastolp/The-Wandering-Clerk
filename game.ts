@@ -277,6 +277,29 @@ export const MonsterLookup = {
 };
 
 // -----------------------------------------------------------------------
+// ItemLookup — used by !item <name> to look up any item's full details
+// by name (exact or partial), whether or not the caller owns it.
+// -----------------------------------------------------------------------
+export const ItemLookup = {
+  find(needle: string): ItemDef | undefined {
+    const n = needle.trim().toLowerCase();
+    if (!n) return undefined;
+    return items.find((i) => i.key.toLowerCase() === n) ||
+      items.find((i) => i.name.toLowerCase() === n) ||
+      items.find((i) => i.name.toLowerCase().indexOf(n) !== -1);
+  },
+
+  describe(itemDef: ItemDef): string {
+    const bonus =
+      itemDef.type === "weapon" ? "+" + (itemDef.atkBonus ?? 0) + " to hunt rolls" :
+      itemDef.type === "armor" ? "+" + (itemDef.acBonus ?? 0) + " AC" :
+      itemDef.type === "potion" && itemDef.heal ? "heals " + itemDef.heal[0] + "d" + itemDef.heal[1] + "+" + itemDef.heal[2] + " HP" :
+      "no mechanical bonus, purely for flavor";
+    return itemDef.name + " (" + itemDef.type + ") — " + bonus + " — " + itemDef.price + " gold — " + itemDef.desc;
+  },
+};
+
+// -----------------------------------------------------------------------
 // Inventory
 // -----------------------------------------------------------------------
 export const Inventory = {

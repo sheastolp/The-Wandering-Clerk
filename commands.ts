@@ -4,7 +4,7 @@
 //  To add a new command: write the function here, then add one line to
 //  COMMAND_DEFS at the bottom of twitch.ts.
 // =============================================================================
-import { Rules, Combat, Inventory, Merchant, Advisor, Util, Character, MonsterLookup } from "./game.ts";
+import { Rules, Combat, Inventory, Merchant, Advisor, Util, Character, MonsterLookup, ItemLookup } from "./game.ts";
 import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
 
@@ -264,6 +264,29 @@ export async function buy(username: string, display: string, args: string[]): Pr
     " gold. Check !inventory, and !use it when the moment calls. The stall has a fresh offer in that slot. " + Advisor.recommendNextAction(c, offers);
 }
 
+export async function item(username: string, display: string, args: string[]): Promise<string> {
+  const needle = args.join(" ").trim();
+
+  if (needle) {
+    const found = ItemLookup.find(needle);
+    if (!found) {
+      return "@" + display + " no such ware is known to the Clerk as \"" + needle + "\". Check !merchant for what's currently on the stall.";
+    }
+    return "@" + display + " " + ItemLookup.describe(found);
+  }
+
+  const c = await Store.getCharacter(username);
+  if (!c) return "@" + display + " the ledger has no entry under your name yet. Try !item <name> to look something up directly.";
+  const { weapon, armor } = c.equipped;
+  if (!weapon && !armor) {
+    return "@" + display + " bare fists and no armor — nothing on you for the Clerk to appraise. Try !item <name> to look something up directly.";
+  }
+  const parts: string[] = [];
+  if (weapon) parts.push(ItemLookup.describe(weapon));
+  if (armor) parts.push(ItemLookup.describe(armor));
+  return "@" + display + " " + parts.join(" | ");
+}
+
 export async function inventory(username: string, display: string): Promise<string> {
   const c = await Store.getCharacter(username);
   if (!c) return "@" + display + " the ledger has no entry under your name yet.";
@@ -359,5 +382,5 @@ export async function resetchar(username: string, display: string, args: string[
 
 export const Commands: Record<string, (username: string, display: string, args: string[]) => Promise<string>> = {
   help, start, createchar, character, hunt, autohunt, rest, merchant,
-  coinpurse, buy, inventory, use, drop, sell, resetchar, quests, lurk,
+  coinpurse, buy, inventory, item, use, drop, sell, resetchar, quests, lurk,
 };
