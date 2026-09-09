@@ -44,6 +44,24 @@ export async function help(_username: string, display: string): Promise<string> 
   return "@" + display + " 📜 The Clerk keeps the full charter of commands sealed at this scroll: " + GUIDE_URL;
 }
 
+const LURK_LINES = [
+  " slips into the shadows at the back of the guildhall, cloak drawn — still within earshot of the bounty board.",
+  " takes a quiet seat in the corner booth, boots up on the table, one eye on the room.",
+  " melts into the tavern crowd, nursing a drink and watching the door.",
+  " retreats to the archive stacks to \"study,\" though the Clerk suspects a nap is more likely.",
+  " posts up by the hearth, hood low, content to let the other adventurers take the spotlight.",
+  " signs the guest ledger and disappears into the rafters like a proper rogue.",
+  " leans against the back wall near the notice board, present but unbothered.",
+  " ducks behind a stack of crates in the storeroom — technically still on guild grounds.",
+  " curls up with the guild cat by the window and goes very, very still.",
+  " steps into the scrying pool's reflection, watching from just out of frame.",
+];
+
+export async function lurk(_username: string, display: string): Promise<string> {
+  const line = LURK_LINES[Math.floor(Math.random() * LURK_LINES.length)];
+  return "@" + display + " 🥷" + line + " The Clerk marks you present in the ledger all the same.";
+}
+
 export async function start(username: string, display: string): Promise<string> {
   const c = await Store.getCharacter(username);
   if (!c) {
@@ -78,11 +96,21 @@ export async function createchar(username: string, display: string, args: string
     character.race.name + " " + character.cls.name + "! " + Rules.sheetLine(character) + ". " + Advisor.recommendNextAction(character, offers);
 }
 
-export async function character(username: string, display: string): Promise<string> {
-  const c = await Store.getCharacter(username);
-  if (!c) return "@" + display + " the ledger has no entry under your name yet. Say !enlist <name> or !enlist random to begin.";
-  const offers = await Store.getMerchantOffers();
-  return "@" + display + " The ledger reads: " + Rules.sheetLine(c) + " " + Advisor.recommendNextAction(c, offers);
+export async function character(username: string, display: string, args: string[]): Promise<string> {
+  const targetArg = (args[0] || "").replace(/^@/, "").trim();
+
+  if (!targetArg) {
+    const c = await Store.getCharacter(username);
+    if (!c) return "@" + display + " the ledger has no entry under your name yet. Say !enlist <name> or !enlist random to begin.";
+    const offers = await Store.getMerchantOffers();
+    return "@" + display + " The ledger reads: " + Rules.sheetLine(c) + " " + Advisor.recommendNextAction(c, offers);
+  }
+
+  // Looking up someone else's entry — targetArg is their Twitch username
+  // (how records are keyed), not their in-game character name.
+  const target = await Store.getCharacter(targetArg);
+  if (!target) return "@" + display + " no ledger entry found for \"" + targetArg + "\".";
+  return "@" + display + " " + target.name + "'s ledger entry: " + Rules.sheetLine(target);
 }
 
 export async function hunt(username: string, display: string, args: string[]): Promise<string> {
@@ -300,6 +328,25 @@ export async function drop(username: string, display: string, args: string[]): P
   return "@" + display + " the " + invItem.name + " is left behind on the road.";
 }
 
+export async function sell(username: string, display: string, args: string[]): Promise<string> {
+  const c = await Store.getCharacter(username);
+  if (!c) return "@" + display + " the ledger has no entry under your name yet.";
+  const needle = args.join(" ").trim();
+  if (!needle) return "@" + display + " sell what? Try !sell <item name>.";
+  const invItem = Inventory.find(c, needle);
+  if (!invItem) {
+    const have = c.inventory.length ? c.inventory.map((it) => it.name).join(", ") : "(nothing)";
+    return "@" + display + " nothing in your pack matches \"" + needle + "\". You carry: " + have;
+  }
+  const sellPrice = Math.max(1, Math.floor(invItem.price / 2));
+  Inventory.removeOne(c, invItem);
+  c.gold += sellPrice;
+  await Store.saveCharacter(c);
+  const offers = await Store.getMerchantOffers();
+  return "@" + display + " " + c.name + " sells the " + invItem.name + " back to the stall for " + sellPrice +
+    " gold. " + Advisor.recommendNextAction(c, offers);
+}
+
 export async function resetchar(username: string, display: string, args: string[]): Promise<string> {
   const c = await Store.getCharacter(username);
   if (!c) return "@" + display + " there's no entry under your name for the Clerk to close.";
@@ -312,5 +359,5 @@ export async function resetchar(username: string, display: string, args: string[
 
 export const Commands: Record<string, (username: string, display: string, args: string[]) => Promise<string>> = {
   help, start, createchar, character, hunt, autohunt, rest, merchant,
-  coinpurse, buy, inventory, use, drop, resetchar, quests,
+  coinpurse, buy, inventory, use, drop, sell, resetchar, quests, lurk,
 };

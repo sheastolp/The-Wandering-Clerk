@@ -4,7 +4,7 @@
 //  Town's SQLite binding). Same function names/shapes commands.ts already
 //  expects — only this file's internals changed.
 // =============================================================================
-import { Character, MerchantOffer } from "./game.ts";
+import { Character, MerchantOffer, Rules } from "./game.ts";
 import { Quest } from "./quests.ts";
 
 const BASE_URL = (Deno.env.get("VALTOWN_API_BASE_URL") || "").replace(/\/+$/, "");
@@ -34,6 +34,8 @@ export async function getCharacter(username: string): Promise<Character | null> 
   }
   const character = (await res.json()) as Character;
   if (!character.questProgress) character.questProgress = {};
+  const healed = Rules.applyPassiveHealing(character); // catch up on regen since last read
+  if (healed) await saveCharacter(character);
   return character;
 }
 
@@ -116,7 +118,7 @@ export async function setMeta(key: string, value: string): Promise<void> {
 // Feature toggles set from the moderator-locked /admin panel on Val Town,
 // scoped per channel. Keys here must stay in sync with FEATURE_DEFS in the
 // Val Town main.ts.
-const FEATURE_KEYS = ["characters", "combat", "shop", "quests", "merchant_ads", "quest_ads", "item_lore"];
+const FEATURE_KEYS = ["characters", "combat", "shop", "quests", "merchant_ads", "quest_ads", "item_lore", "start_nudge"];
 
 export async function getFeatureFlags(channel: string): Promise<Record<string, boolean>> {
   const raw = await getMeta("feature_flags");

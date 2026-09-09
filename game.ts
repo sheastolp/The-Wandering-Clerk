@@ -1,4 +1,17 @@
 // =============================================================================
+//  game.ts   —   ⚙️ GITHUB REPO COPY (sheastolp/The-Wandering-Clerk)
+//  Used by: commands.ts, twitch.ts (the live bot process)
+//  This is the FULL, ACTIVE copy — combat, the merchant, quests, item
+//  lore, passive HP regen, all of it. If you're editing game rules,
+//  balance numbers, or Advisor hints, this is the file that matters.
+//
+//  A second copy of this filename lives in the separate Val Town project
+//  (sheastolp's huntandhoardbot val) — that one is a trimmed-down,
+//  storage-only subset (just enough for type-checking store.ts and
+//  rolling default merchant/quest data on first run). The two are NOT
+//  auto-synced; changes here don't propagate there and vice versa. If
+//  you're not sure which one you're looking at, check this banner.
+// =============================================================================
 //  game.ts — all the stateless game math and rules. Nothing in here talks
 //  to Twitch or SQLite; it only operates on the plain objects below.
 // =============================================================================
@@ -25,6 +38,7 @@ export interface Character {
   equipped: { weapon: InventoryItem | null; armor: InventoryItem | null };
   createdAt: number;
   questProgress: Record<string, number>; // quest id -> kills logged toward it
+  lastHealTickAt: number; // for passive regen — see Rules.applyPassiveHealing
 }
 
 export interface MerchantOffer { merchant: string; item: ItemDef; postedAt: number }
@@ -67,6 +81,32 @@ export const Util = {
 // Rules — character math
 // -----------------------------------------------------------------------
 export const Rules = {
+  PASSIVE_HEAL_INTERVAL_MS: 15 * 60 * 1000, // 15 minutes
+  PASSIVE_HEAL_AMOUNT: 3,
+
+  // Catch-up healing: called whenever a character is loaded (see
+  // storeClient.ts), not on any timer of its own — so it heals correctly
+  // for however much real time has actually passed since the last check,
+  // even across gaps between bot runs. Returns true if any healing was
+  // applied (i.e., the character needs to be saved).
+  applyPassiveHealing(character: Character): boolean {
+    if (!character.lastHealTickAt) {
+      character.lastHealTickAt = Date.now(); // back-compat: no retroactive burst for old characters
+      return false;
+    }
+    if (character.hp >= character.hpMax) {
+      character.lastHealTickAt = Date.now(); // fully healed — no ticks to bank while topped up
+      return false;
+    }
+    const elapsed = Date.now() - character.lastHealTickAt;
+    const ticks = Math.floor(elapsed / Rules.PASSIVE_HEAL_INTERVAL_MS);
+    if (ticks <= 0) return false;
+    const healed = ticks * Rules.PASSIVE_HEAL_AMOUNT;
+    character.hp = Util.clamp(character.hp + healed, 0, character.hpMax);
+    character.lastHealTickAt += ticks * Rules.PASSIVE_HEAL_INTERVAL_MS; // keep leftover partial-interval progress
+    return true;
+  },
+
   rollRandomName(): string {
     return Util.pick(nameFirst) + " " + Util.pick(nameEpithet);
   },
@@ -104,6 +144,7 @@ export const Rules = {
       equipped: { weapon: null, armor: null },
       createdAt: Date.now(),
       questProgress: {},
+      lastHealTickAt: Date.now(),
       hp: 0,
       hpMax: 0,
     };
