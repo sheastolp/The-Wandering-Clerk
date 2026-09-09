@@ -207,24 +207,38 @@ export async function runForWindow(budgetMs: number): Promise<void> {
     }
   }
 
-  async function handleChatMessageEvent(event: any) {
-    const channel = (event.broadcaster_user_login || "").toLowerCase();
-    const username = (event.chatter_user_login || "").toLowerCase();
-    const text = String(event.message?.text || "").trim();
-    const badges: Badge[] = event.badges || [];
+async function handleChatMessageEvent(event: any) {
+  const channel = (event.broadcaster_user_login || "").toLowerCase();
+  const sourceChannel = (event.source_broadcaster_user_login || channel).toLowerCase();
 
-    if (!channel || !username || !text.startsWith("!")) return;
-    if (botUser && username === botUser.login.toLowerCase()) return;
+  // Twitch Shared Chat: while this channel is in a shared-chat session with
+  // another streamer, EventSub relays EVERY message in the combined feed to
+  // us under broadcaster_user_login = this channel — even messages typed in
+  // the other streamer's chat. source_broadcaster_user_login says where a
+  // message really came from. If it doesn't match the channel we're
+  // subscribed to, this is a relayed copy of someone else's chat: skip it
+  // so a foreign channel's chatters can't trigger commands or replies here.
+  // If that other channel is itself onboarded, its own direct subscription
+  // delivers the same message with source === destination and handles it
+  // there instead.
+  if (sourceChannel !== channel) return;
 
-    const [rawTrigger, ...args] = text.split(/\s+/);
-    const trigger = rawTrigger.toLowerCase();
+  const username = (event.chatter_user_login || "").toLowerCase();
+  const text = String(event.message?.text || "").trim();
+  const badges: Badge[] = event.badges || [];
 
-    if (ADMIN_TRIGGERS.has(trigger)) {
-      await handleAdminCommand(channel, username, badges, trigger, args);
-      return;
-    }
-    await handleGameCommand(channel, username, trigger, args);
+  if (!channel || !username || !text.startsWith("!")) return;
+  if (botUser && username === botUser.login.toLowerCase()) return;
+
+  const [rawTrigger, ...args] = text.split(/\s+/);
+  const trigger = rawTrigger.toLowerCase();
+
+  if (ADMIN_TRIGGERS.has(trigger)) {
+    await handleAdminCommand(channel, username, badges, trigger, args);
+    return;
   }
+  await handleGameCommand(channel, username, trigger, args);
+}
 
   async function maybePostPeriodicUpdates() {
     await refreshFeatureFlags();
