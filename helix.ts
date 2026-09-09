@@ -38,28 +38,6 @@ async function getAppAccessToken(): Promise<string> {
   appAccessTokenExpiresAt = Date.now() + json.expires_in * 1000;
   return appAccessToken;
 }
-
-export async function sendChatMessage(broadcasterId: string, senderId: string, text: string): Promise<void> {
-  const appToken = await getAppAccessToken();
-  const res = await fetch(`${BASE}/chat/messages`, {
-    method: "POST",
-    headers: {
-      "Client-Id": CLIENT_ID,
-      "Authorization": `Bearer ${appToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ broadcaster_id: broadcasterId, sender_id: senderId, message: text, for_source_only: true }),
-  });
-  if (!res.ok) {
-    console.error("sendChatMessage HTTP failure:", res.status, await res.text());
-    return;
-  }
-  const json = await res.json();
-  const result = json.data?.[0];
-  if (result && result.is_sent === false) {
-    console.error("sendChatMessage was NOT delivered — drop_reason:", result.drop_reason?.message || "(none given)");
-  }
-}
   return {
     "Client-Id": CLIENT_ID,
     "Authorization": `Bearer ${currentAccessToken}`,
@@ -147,14 +125,26 @@ export async function createChatMessageSubscription(broadcasterId: string, botId
   return true;
 }
 
+
 export async function sendChatMessage(broadcasterId: string, senderId: string, text: string): Promise<void> {
-  const res = await helixFetch(`${BASE}/chat/messages`, {
+  const appToken = await getAppAccessToken();
+  const res = await fetch(`${BASE}/chat/messages`, {
     method: "POST",
-    body: JSON.stringify({ broadcaster_id: broadcasterId, sender_id: senderId, message: text }),
+    headers: {
+      "Client-Id": CLIENT_ID,
+      "Authorization": `Bearer ${appToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ broadcaster_id: broadcasterId, sender_id: senderId, message: text, for_source_only: true }),
   });
   if (!res.ok) {
     console.error("sendChatMessage HTTP failure:", res.status, await res.text());
     return;
+  }
+  const json = await res.json();
+  const result = json.data?.[0];
+  if (result && result.is_sent === false) {
+    console.error("sendChatMessage was NOT delivered — drop_reason:", result.drop_reason?.message || "(none given)");
   }
   const json = await res.json();
   const result = json.data?.[0];
