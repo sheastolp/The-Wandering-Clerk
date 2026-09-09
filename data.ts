@@ -128,6 +128,8 @@ export const items: ItemDef[] = [
   { key: "greater_potion", name: "Potion of Healing", type: "potion", heal: [4, 6, 4], price: 20, desc: "restores 4d6+4 HP when drunk" },
   { key: "superior_potion", name: "Superior Potion of Healing", type: "potion", heal: [6, 8, 6], price: 40, desc: "restores 6d8+6 HP when drunk" },
   { key: "draught_of_vigor", name: "Draught of Vigor", type: "potion", heal: [3, 4, 3], price: 12, desc: "restores 3d4+3 HP, tastes faintly of cinnamon" },
+  { key: "travelers_tonic", name: "Traveler's Tonic", type: "potion", heal: [1, 4, 1], price: 5, desc: "restores 1d4+1 HP, better than nothing" },
+  { key: "elixir_of_vitality", name: "Elixir of Vitality", type: "potion", heal: [8, 10, 8], price: 65, desc: "restores 8d10+8 HP when drunk" },
 
   // --- Weapons ---
   { key: "rusty_shortsword", name: "Rusty Shortsword", type: "weapon", atkBonus: 1, price: 15, desc: "+1 to hunt rolls while equipped" },
@@ -135,6 +137,9 @@ export const items: ItemDef[] = [
   { key: "fine_rapier", name: "Finely Balanced Rapier", type: "weapon", atkBonus: 3, price: 60, desc: "+3 to hunt rolls while equipped" },
   { key: "steel_greataxe", name: "Steel Greataxe", type: "weapon", atkBonus: 4, price: 90, desc: "+4 to hunt rolls while equipped" },
   { key: "ancient_blade", name: "Ancient Blade of Unknown Make", type: "weapon", atkBonus: 5, price: 130, desc: "+5 to hunt rolls while equipped" },
+  { key: "twin_daggers", name: "Twin Daggers", type: "weapon", atkBonus: 2, price: 35, desc: "+2 to hunt rolls while equipped" },
+  { key: "runed_warhammer", name: "Runed Warhammer", type: "weapon", atkBonus: 4, price: 90, desc: "+4 to hunt rolls while equipped" },
+  { key: "wanderers_cursed_blade", name: "Wanderer's Cursed Blade", type: "weapon", atkBonus: 6, price: 180, desc: "+6 to hunt rolls while equipped, whispers faintly at night" },
 
   // --- Armor ---
   { key: "padded_vest", name: "Padded Leather Vest", type: "armor", acBonus: 1, price: 15, desc: "+1 AC while equipped" },
@@ -142,6 +147,9 @@ export const items: ItemDef[] = [
   { key: "plate_scraps", name: "Salvaged Plate Scraps", type: "armor", acBonus: 3, price: 60, desc: "+3 AC while equipped" },
   { key: "reinforced_plate", name: "Reinforced Plate", type: "armor", acBonus: 4, price: 90, desc: "+4 AC while equipped" },
   { key: "dragonhide_cloak", name: "Dragonhide Cloak", type: "armor", acBonus: 5, price: 130, desc: "+5 AC while equipped" },
+  { key: "wolfskin_mantle", name: "Wolfskin Mantle", type: "armor", acBonus: 2, price: 35, desc: "+2 AC while equipped" },
+  { key: "runed_bulwark", name: "Runed Bulwark", type: "armor", acBonus: 4, price: 90, desc: "+4 AC while equipped" },
+  { key: "wyrmscale_aegis", name: "Wyrmscale Aegis", type: "armor", acBonus: 6, price: 180, desc: "+6 AC while equipped, faintly warm to the touch" },
 
   // --- Trinkets (flavor only) ---
   { key: "lucky_coin", name: "Merchant's Lucky Coin", type: "trinket", price: 5, desc: "brings no measurable luck, but it is shiny" },
@@ -154,6 +162,12 @@ export const items: ItemDef[] = [
   { key: "moth_eaten_cloak", name: "Moth-Eaten \"Invisibility\" Cloak", type: "trinket", price: 9, desc: "does not, in fact, turn you invisible" },
   { key: "mostly_empty_bag", name: "Bag of Holding (mostly empty)", type: "trinket", price: 18, desc: "holds slightly more than it should" },
   { key: "dubious_map", name: "Dubious Treasure Map", type: "trinket", price: 5, desc: "X marks a spot that is now a well-known bakery" },
+  { key: "bent_spoon", name: "Suspiciously Bent Spoon", type: "trinket", price: 3, desc: "bends further if you stare at it" },
+  { key: "empty_bottle", name: "Empty Potion Bottle", type: "trinket", price: 1, desc: "smells faintly of adventure" },
+  { key: "singed_parchment", name: "Singed Parchment Scrap", type: "trinket", price: 4, desc: "the important part burned off" },
+  { key: "necklace_of_ears", name: "Necklace of Suspicious Ears", type: "trinket", price: 8, desc: "the merchant insists they are \"ethically sourced\"" },
+  { key: "unlucky_die", name: "Unlucky Six-Sided Die", type: "trinket", price: 2, desc: "has never once rolled a 6" },
+  { key: "tin_crown", name: "Tin Crown", type: "trinket", price: 12, desc: "makes you feel briefly regal" },
 ];
 
 export const merchantNames: string[] = [
