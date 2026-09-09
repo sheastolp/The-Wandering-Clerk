@@ -18,6 +18,48 @@ if (!currentAccessToken && !REFRESH_TOKEN) {
 const BASE = "https://api.twitch.tv/helix";
 
 function authHeaders(): HeadersInit {
+let appAccessToken = "";
+let appAccessTokenExpiresAt = 0;
+
+async function getAppAccessToken(): Promise<string> {
+  if (appAccessToken && Date.now() < appAccessTokenExpiresAt - 60_000) return appAccessToken;
+  const params = new URLSearchParams({
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    grant_type: "client_credentials",
+  });
+  const res = await fetch(`https://id.twitch.tv/oauth2/token?${params.toString()}`, { method: "POST" });
+  if (!res.ok) {
+    console.error("getAppAccessToken failed:", res.status, await res.text());
+    throw new Error("Could not obtain app access token");
+  }
+  const json = await res.json();
+  appAccessToken = json.access_token;
+  appAccessTokenExpiresAt = Date.now() + json.expires_in * 1000;
+  return appAccessToken;
+}
+
+export async function sendChatMessage(broadcasterId: string, senderId: string, text: string): Promise<void> {
+  const appToken = await getAppAccessToken();
+  const res = await fetch(`${BASE}/chat/messages`, {
+    method: "POST",
+    headers: {
+      "Client-Id": CLIENT_ID,
+      "Authorization": `Bearer ${appToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ broadcaster_id: broadcasterId, sender_id: senderId, message: text, for_source_only: true }),
+  });
+  if (!res.ok) {
+    console.error("sendChatMessage HTTP failure:", res.status, await res.text());
+    return;
+  }
+  const json = await res.json();
+  const result = json.data?.[0];
+  if (result && result.is_sent === false) {
+    console.error("sendChatMessage was NOT delivered — drop_reason:", result.drop_reason?.message || "(none given)");
+  }
+}
   return {
     "Client-Id": CLIENT_ID,
     "Authorization": `Bearer ${currentAccessToken}`,
