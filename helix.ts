@@ -18,6 +18,17 @@ if (!currentAccessToken && !REFRESH_TOKEN) {
 const BASE = "https://api.twitch.tv/helix";
 
 function authHeaders(): HeadersInit {
+  return {
+    "Client-Id": CLIENT_ID,
+    "Authorization": `Bearer ${currentAccessToken}`,
+    "Content-Type": "application/json",
+  };
+}
+
+// Separate from the bot's user-token auth above: sendChatMessage needs an
+// App Access Token (client-credentials grant) so it can pass
+// for_source_only during Shared Chat — see sendChatMessage below. Cached at
+// module scope so it's reused across calls instead of re-fetched every send.
 let appAccessToken = "";
 let appAccessTokenExpiresAt = 0;
 
@@ -37,12 +48,6 @@ async function getAppAccessToken(): Promise<string> {
   appAccessToken = json.access_token;
   appAccessTokenExpiresAt = Date.now() + json.expires_in * 1000;
   return appAccessToken;
-}
-  return {
-    "Client-Id": CLIENT_ID,
-    "Authorization": `Bearer ${currentAccessToken}`,
-    "Content-Type": "application/json",
-  };
 }
 
 // Twitch user access tokens expire (typically ~4 hours) but refresh
@@ -140,11 +145,6 @@ export async function sendChatMessage(broadcasterId: string, senderId: string, t
   if (!res.ok) {
     console.error("sendChatMessage HTTP failure:", res.status, await res.text());
     return;
-  }
-  const json = await res.json();
-  const result = json.data?.[0];
-  if (result && result.is_sent === false) {
-    console.error("sendChatMessage was NOT delivered — drop_reason:", result.drop_reason?.message || "(none given)");
   }
   const json = await res.json();
   const result = json.data?.[0];
