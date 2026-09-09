@@ -72,6 +72,13 @@ const SEND_DELAY_MS = 1500;
 const PERIODIC_CHECK_MS = 10 * 1000; // how often we check "is it time to post an ad / sync channels / is the budget up"
 const CHANNEL_SYNC_MS = 3 * 60 * 1000; // how often to check for newly onboarded channels
 
+// Auto-announcement spacing (see maybePostPeriodicUpdates / channelReadyForAnnouncement):
+// a channel must see this many chat lines OR this much time pass since its
+// last auto-announcement before it's eligible for another one — of ANY of
+// the four types below. That shared gate is what keeps them from clumping.
+const CHANNEL_MIN_MESSAGES_BETWEEN_ANNOUNCEMENTS = 5;
+const CHANNEL_MIN_MS_BETWEEN_ANNOUNCEMENTS = 30 * 60 * 1000; // 30 minutes
+
 export async function runForWindow(budgetMs: number): Promise<void> {
   const deadline = Date.now() + budgetMs;
   const TOKEN_REFRESH_MS = 3 * 60 * 60 * 1000; // proactively refresh every 3h so a 4h token never expires mid-run
@@ -87,6 +94,8 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   let lastChannelSyncAt = 0;
   const featureFlagsByChannel = new Map<string, Record<string, boolean>>();
   const channelUsers = new Map<string, HelixUser>();
+  const channelMsgCountSinceAnnouncement = new Map<string, number>(); // real chat lines seen per channel since its last auto-announcement
+  const channelLastAnnouncementAt = new Map<string, number>(); // when that channel last heard ANY auto-announcement
   const outbox: { channel: string; text: string }[] = [];
   let draining = false;
 
@@ -128,6 +137,17 @@ export async function runForWindow(budgetMs: number): Promise<void> {
 
   function flagsFor(channel: string): Record<string, boolean> {
     return featureFlagsByChannel.get(channel) || {}; // empty map reads as "everything enabled" below
+  }
+
+  function channelReadyForAnnouncement(channel: string): boolean {
+    const sinceLast = Date.now() - (channelLastAnnouncementAt.get(channel) || 0);
+    const msgsSince = channelMsgCountSinceAnnouncement.get(channel) || 0;
+    return msgsSince >= CHANNEL_MIN_MESSAGES_BETWEEN_ANNOUNCEMENTS || sinceLast >= CHANNEL_MIN_MS_BETWEEN_ANNOUNCEMENTS;
+  }
+
+  function recordChannelAnnouncement(channel: string) {
+    channelMsgCountSinceAnnouncement.set(channel, 0);
+    channelLastAnnouncementAt.set(channel, Date.now());
   }
 
   async function refreshFeatureFlags() {
@@ -232,8 +252,14 @@ async function handleChatMessageEvent(event: any) {
   const text = String(event.message?.text || "").trim();
   const badges: Badge[] = event.badges || [];
 
-  if (!channel || !username || !text.startsWith("!")) return;
+  if (!channel || !username) return;
   if (botUser && username === botUser.login.toLowerCase()) return;
+
+  // Count every real chat line (not just commands) toward the per-channel
+  // announcement-spacing gate — see channelReadyForAnnouncement().
+  channelMsgCountSinceAnnouncement.set(channel, (channelMsgCountSinceAnnouncement.get(channel) || 0) + 1);
+
+  if (!text.startsWith("!")) return;
 
   const [rawTrigger, ...args] = text.split(/\s+/);
   const trigger = rawTrigger.toLowerCase();
@@ -253,12 +279,27 @@ async function handleChatMessageEvent(event: any) {
     // gets a reply regardless of live status.
     const liveChannels = await getLiveChannels([...channelUsers.keys()]);
 
+    // Sends `text` to every live channel that has `flagKey` enabled AND is
+    // ready to hear another unprompted line (channelReadyForAnnouncement).
+    // Shared across all four announcement types below — posting one kind
+    // resets the clock the others check too, which is what keeps them from
+    // clumping together in any one channel.
+    function announceToChannels(flagKey: string, text: string) {
+      for (const channel of channelUsers.keys()) {
+        if (flagsFor(channel)[flagKey] === false) continue;
+        if (!liveChannels.has(channel)) continue;
+        if (!channelReadyForAnnouncement(channel)) continue;
+        queueSay(channel, text);
+        recordChannelAnnouncement(channel);
+      }
+    }
+
     // Fully rerolls the stall's offers on a jittered ~8-12 minute cadence
     // (matching the original codex script's Merchant.AD_INTERVAL_MS /
     // AD_JITTER_MS), rather than just advertising whatever's already there.
     // The stall itself is shared across every channel; each channel's
-    // merchant_ads toggle (and live status) only controls whether THAT
-    // channel hears about it.
+    // merchant_ads toggle (and live status, and announcement readiness)
+    // only controls whether THAT channel hears about it.
     const lastRestockRaw = await Store.getMeta("last_merchant_restock_at");
     const lastRestock = lastRestockRaw ? parseInt(lastRestockRaw, 10) : 0;
     const restockThreshold = Merchant.AD_INTERVAL_MS + Math.floor(Math.random() * Merchant.AD_JITTER_MS);
@@ -268,9 +309,7 @@ async function handleChatMessageEvent(event: any) {
       const desc = Merchant.describeOffers(offers);
       const announcement = "🛒 The stall has turned over its wares! " + desc +
         ". Say !buy <#|item name> to purchase, or !merchant to see it again later.";
-      for (const channel of channelUsers.keys()) {
-        if (flagsFor(channel).merchant_ads !== false && liveChannels.has(channel)) queueSay(channel, announcement);
-      }
+      announceToChannels("merchant_ads", announcement);
       await Store.setMeta("last_merchant_restock_at", String(Date.now()));
     }
 
@@ -282,9 +321,7 @@ async function handleChatMessageEvent(event: any) {
       const desc = QuestBoard.describeBoard(board);
       const announcement = "📜 The Clerk posts a fresh set of bounties: " + desc +
         ". Say !hunt <monster name> to take one on, or !quests to check your progress.";
-      for (const channel of channelUsers.keys()) {
-        if (flagsFor(channel).quest_ads !== false && liveChannels.has(channel)) queueSay(channel, announcement);
-      }
+      announceToChannels("quest_ads", announcement);
       await Store.setMeta("last_quest_refresh_at", String(Date.now()));
     }
 
@@ -298,9 +335,7 @@ async function handleChatMessageEvent(event: any) {
       const pickedOffer = ItemLore.pickOffer(currentOffers);
       if (pickedOffer) {
         const story = "📖 " + ItemLore.story(pickedOffer);
-        for (const channel of channelUsers.keys()) {
-          if (flagsFor(channel).item_lore !== false && liveChannels.has(channel)) queueSay(channel, story);
-        }
+        announceToChannels("item_lore", story);
       }
       await Store.setMeta("last_item_story_at", String(Date.now()));
     }
@@ -314,9 +349,7 @@ async function handleChatMessageEvent(event: any) {
     if (Date.now() - lastNudge >= nudgeThreshold) {
       const nudge = "New around here? Say !start for a quick status check, or !enlist <name> " +
         "(or !enlist random) to join in whenever you're ready. !help has the full charter if you're curious.";
-      for (const channel of channelUsers.keys()) {
-        if (flagsFor(channel).start_nudge !== false && liveChannels.has(channel)) queueSay(channel, nudge);
-      }
+      announceToChannels("start_nudge", nudge);
       await Store.setMeta("last_start_nudge_at", String(Date.now()));
     }
   }
