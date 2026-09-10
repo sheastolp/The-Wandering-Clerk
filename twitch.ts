@@ -5,8 +5,8 @@
 //  window (see runForWindow), since GitHub Actions kills any job after 6
 //  hours. bot.ts calls this once per scheduled workflow run.
 // =============================================================================
-import { Commands } from "./commands.ts";
-import { Merchant, ItemLore } from "./game.ts";
+import { Commands, applyQuestProgress } from "./commands.ts";
+import { Merchant, ItemLore, AutoHunt, AutoHuntSession } from "./game.ts";
 import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
 import { roleFromBadges, isModOrBroadcaster, Badge } from "./permissions.ts";
@@ -26,6 +26,8 @@ const COMMAND_DEFS: { name: keyof typeof Commands; triggers: string[] }[] = [
   { name: "character", triggers: ["!chars", "!ledger"] },
   { name: "hunt", triggers: ["!hunt"] },
   { name: "autohunt", triggers: ["!autohunt", "!auto"] },
+  { name: "autohuntstop", triggers: ["!autohuntstop", "!autostop"] },
+  { name: "autohuntstatus", triggers: ["!autohuntstatus", "!autostatus"] },
   { name: "rest", triggers: ["!rest"] },
   { name: "merchant", triggers: ["!merchant", "!shop"] },
   { name: "coinpurse", triggers: ["!coinpurse", "!purse"] },
@@ -54,6 +56,8 @@ const COMMAND_FEATURE: Partial<Record<keyof typeof Commands, string>> = {
   resetchar: "characters",
   hunt: "combat",
   autohunt: "combat",
+  autohuntstop: "combat",
+  autohuntstatus: "combat",
   rest: "combat",
   merchant: "shop",
   buy: "shop",
@@ -92,6 +96,8 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   let sessionId: string | null = null;
   let botUser: HelixUser | null = null;
   let lastChannelSyncAt = 0;
+  let lastAutohuntCheckAt = 0;
+  const AUTOHUNT_CHECK_MS = 30 * 1000; // independent of CHANNEL_SYNC_MS so timed hunts fire close to schedule
   const featureFlagsByChannel = new Map<string, Record<string, boolean>>();
   const channelUsers = new Map<string, HelixUser>();
   const channelMsgCountSinceAnnouncement = new Map<string, number>(); // real chat lines seen per channel since its last auto-announcement
@@ -169,7 +175,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
       return;
     }
     try {
-      const reply = await Commands[commandName](username, username, args);
+      const reply = await Commands[commandName](username, username, args, channel);
       if (reply) queueSay(channel, reply);
     } catch (err) {
       console.error(`Error running ${trigger} for ${username} in #${channel}:`, err);
@@ -354,6 +360,40 @@ async function handleChatMessageEvent(event: any) {
     }
   }
 
+  // Checked on its own short cadence (independent of the 3-minute channel
+  // sync) so timed autohunts fire close to their scheduled time without
+  // waiting on the slower periodic-updates gate. Sessions are persisted
+  // (see Store.getAutohuntSessions), so a restart between workflow runs
+  // just resumes from where the schedule left off rather than losing
+  // progress or fast-forwarding through missed time.
+  async function processAutohuntSessions() {
+    const sessions = await Store.getAutohuntSessions();
+    if (!sessions.length) return;
+    const remaining: AutoHuntSession[] = [];
+    let changed = false;
+    for (const session of sessions) {
+      if (AutoHunt.isExpired(session)) {
+        changed = true;
+        const c = await Store.getCharacter(session.username);
+        if (c) queueSay(session.channel, "@" + session.username + " " + AutoHunt.summary(c, session, "time's up"));
+        continue;
+      }
+      if (!AutoHunt.isDue(session)) {
+        remaining.push(session);
+        continue;
+      }
+      const c = await Store.getCharacter(session.username);
+      if (!c) { changed = true; continue; } // character discharged mid-session — drop it silently
+      const { message, monsterWon } = AutoHunt.tick(c, session);
+      const questMsg = monsterWon ? await applyQuestProgress(c, monsterWon, 1) : "";
+      await Store.saveCharacter(c);
+      changed = true;
+      queueSay(session.channel, "@" + session.username + " " + message + questMsg);
+      remaining.push(session);
+    }
+    if (changed) await Store.saveAutohuntSessions(remaining);
+  }
+
   // Picks up channels onboarded via the one-click /onboard flow mid-run,
   // without waiting for the next scheduled workflow to start.
   async function syncChannels() {
@@ -442,6 +482,10 @@ async function handleChatMessageEvent(event: any) {
         lastChannelSyncAt = Date.now();
         syncChannels().catch((err) => console.error("syncChannels error:", err));
         maybePostPeriodicUpdates().catch((err) => console.error("maybePostPeriodicUpdates error:", err));
+      }
+      if (Date.now() - lastAutohuntCheckAt >= AUTOHUNT_CHECK_MS) {
+        lastAutohuntCheckAt = Date.now();
+        processAutohuntSessions().catch((err) => console.error("processAutohuntSessions error:", err));
       }
       if (Date.now() - lastTokenRefreshAt >= TOKEN_REFRESH_MS) {
         lastTokenRefreshAt = Date.now();
