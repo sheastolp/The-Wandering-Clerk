@@ -4,7 +4,7 @@
 //  To add a new command: write the function here, then add one line to
 //  COMMAND_DEFS at the bottom of twitch.ts.
 // =============================================================================
-import { Rules, Combat, Inventory, Merchant, Advisor, Util, Character, MonsterLookup, ItemLookup } from "./game.ts";
+import { Rules, Combat, Inventory, Merchant, Advisor, Util, Character, MonsterLookup, ItemLookup, AutoHunt } from "./game.ts";
 import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
 
@@ -14,7 +14,7 @@ const GUIDE_URL = "https://huntandhoardbot.val.run/commands";
 // `kills` toward it for this character, and auto turns it in (grants
 // reward, rerolls that board slot) the moment it's met. Returns a message
 // fragment to tack onto the hunt reply, or "" if no quest was touched.
-async function applyQuestProgress(c: Character, monsterName: string, kills: number): Promise<string> {
+export async function applyQuestProgress(c: Character, monsterName: string, kills: number): Promise<string> {
   if (kills <= 0) return "";
   const board = await Store.getQuestBoard();
   const found = QuestBoard.findByMonsterName(board, monsterName);
@@ -144,49 +144,46 @@ export async function hunt(username: string, display: string, args: string[]): P
     ") and beat a hasty retreat. +" + result.xpGained + " XP logged for the effort. HP " + result.hpLeft + "/" + result.hpMax + " — " + rec;
 }
 
-export async function autohunt(username: string, display: string): Promise<string> {
+export async function autohunt(username: string, display: string, args: string[], channel: string): Promise<string> {
   const c = await Store.getCharacter(username);
   if (!c) return "@" + display + " the Clerk can't send an unlisted adventurer into the field — !enlist <name> or !enlist random first.";
   if (c.hp <= 1) {
     return "@" + display + " " + c.name + " can barely stand (" + c.hp + "/" + c.hpMax + " HP) — the Clerk insists on !rest (or a potion) before another bout.";
   }
-
-  const MAX_HUNTS = 10;
-  const startLevel = c.level;
-  let hunts = 0, wins = 0, losses = 0, totalXp = 0, totalGold = 0;
-  let stopReason = "hit the " + MAX_HUNTS + "-bout safety cap";
-  const winsByMonster = new Map<string, number>();
-
-  while (hunts < MAX_HUNTS) {
-    const result = Combat.huntMonster(c);
-    hunts++;
-    totalXp += result.xpGained;
-    totalGold += result.goldGained;
-    if (result.won) {
-      wins++;
-      winsByMonster.set(result.monster.name, (winsByMonster.get(result.monster.name) || 0) + 1);
-    } else {
-      losses++;
-    }
-
-    if (result.leveledTo) { stopReason = "leveled up to " + result.leveledTo; break; }
-    if (c.hp <= 1) { stopReason = "HP hit critical"; break; }
-    if (Advisor.isLowHp(c)) { stopReason = "HP running low"; break; }
+  const sessions = await Store.getAutohuntSessions();
+  if (sessions.some((s) => s.username === c.username)) {
+    return "@" + display + " " + c.name + " is already out on an autohunt — say !autohuntstop to call it back early, or !autohuntstatus to check in.";
   }
-
-  let questMsg = "";
-  for (const [monsterName, kills] of winsByMonster) {
-    questMsg += await applyQuestProgress(c, monsterName, kills);
+  const raw = args.join(" ").trim();
+  const durationMs = AutoHunt.parseDuration(raw);
+  if (durationMs === null) {
+    return "@" + display + " the Clerk doesn't follow that duration — try \"!autohunt 20m\", \"!autohunt 1h\", or just \"!autohunt\" for the default " +
+      AutoHunt.formatDuration(AutoHunt.DEFAULT_DURATION_MS) + ".";
   }
+  sessions.push(AutoHunt.start(c, channel, durationMs));
+  await Store.saveAutohuntSessions(sessions);
+  return "@" + display + " " + c.name + " heads out for " + AutoHunt.formatDuration(durationMs) +
+    " of autohunting, resting up automatically if HP runs low. Say !autohuntstop to recall early, or !autohuntstatus to check in.";
+}
 
-  await Store.saveCharacter(c);
-  const offers = await Store.getMerchantOffers();
-  const leveledUp = c.level > startLevel;
-  const emoji = leveledUp ? " 🎉" : "";
-  const summary = "@" + display + " " + c.name + " waded through " + hunts + " bout" + (hunts === 1 ? "" : "s") + " (" + wins +
-    "W/" + losses + "L): +" + totalXp + " XP, +" + totalGold + " gold. HP " + c.hp + "/" + c.hpMax + ". The Clerk calls a halt: " +
-    stopReason + "." + emoji + questMsg;
-  return summary + " " + Advisor.recommendNextAction(c, offers);
+export async function autohuntstop(username: string, display: string): Promise<string> {
+  const sessions = await Store.getAutohuntSessions();
+  const idx = sessions.findIndex((s) => s.username === username.toLowerCase());
+  if (idx === -1) return "@" + display + " no autohunt is currently running for you.";
+  const [session] = sessions.splice(idx, 1);
+  await Store.saveAutohuntSessions(sessions);
+  const c = await Store.getCharacter(username);
+  return "@" + display + " " + (c ? AutoHunt.summary(c, session, "called back early") : "the Clerk recalls the party.");
+}
+
+export async function autohuntstatus(username: string, display: string): Promise<string> {
+  const sessions = await Store.getAutohuntSessions();
+  const session = sessions.find((s) => s.username === username.toLowerCase());
+  if (!session) return "@" + display + " no autohunt is currently running for you. Say !autohunt <duration> to start one.";
+  const remaining = Math.max(0, session.endsAt - Date.now());
+  return "@" + display + " autohunt in progress: " + session.hunts + " bout" + (session.hunts === 1 ? "" : "s") + " so far (" +
+    session.wins + "W/" + session.losses + "L), +" + session.totalXp + " XP, +" + session.totalGold + " gold, about " +
+    AutoHunt.formatDuration(remaining) + " left.";
 }
 
 export async function rest(username: string, display: string): Promise<string> {
@@ -380,7 +377,7 @@ export async function resetchar(username: string, display: string, args: string[
   return "@" + display + " the Clerk closes " + c.name + "'s file with a heavy seal. Say !enlist when you're ready to open a new one.";
 }
 
-export const Commands: Record<string, (username: string, display: string, args: string[]) => Promise<string>> = {
-  help, start, createchar, character, hunt, autohunt, rest, merchant,
+export const Commands: Record<string, (username: string, display: string, args: string[], channel: string) => Promise<string>> = {
+  help, start, createchar, character, hunt, autohunt, autohuntstop, autohuntstatus, rest, merchant,
   coinpurse, buy, inventory, item, use, drop, sell, resetchar, quests, lurk,
 };
