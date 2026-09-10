@@ -4,7 +4,7 @@
 //  Town's SQLite binding). Same function names/shapes commands.ts already
 //  expects — only this file's internals changed.
 // =============================================================================
-import { Character, MerchantOffer, Rules } from "./game.ts";
+import { Character, MerchantOffer, Rules, AutoHuntSession } from "./game.ts";
 import { Quest } from "./quests.ts";
 
 const BASE_URL = (Deno.env.get("VALTOWN_API_BASE_URL") || "").replace(/\/+$/, "");
@@ -127,4 +127,22 @@ export async function getFeatureFlags(channel: string): Promise<Record<string, b
   const flags: Record<string, boolean> = {};
   for (const key of FEATURE_KEYS) flags[key] = channelStored[key] !== false; // default: enabled
   return flags;
+}
+
+// Timed autohunt sessions — stored as one flat list under a single meta
+// key, reusing the same generic key-value store feature_flags already
+// uses. No dedicated Val Town backend endpoint needed.
+export async function getAutohuntSessions(): Promise<AutoHuntSession[]> {
+  const raw = await getMeta("autohunt_sessions");
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as AutoHuntSession[];
+  } catch (err) {
+    console.error("getAutohuntSessions parse failed:", err);
+    return [];
+  }
+}
+
+export async function saveAutohuntSessions(sessions: AutoHuntSession[]): Promise<void> {
+  await setMeta("autohunt_sessions", JSON.stringify(sessions));
 }
