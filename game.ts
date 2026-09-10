@@ -421,6 +421,130 @@ export const Advisor = {
 };
 
 // -----------------------------------------------------------------------
+// AutoHunt — timed autohunt sessions. A session fires one hunt roughly
+// every HUNT_INTERVAL_MS, for up to durationMs, auto-resting instead of
+// fighting whenever HP dips below the same "low HP" line Advisor already
+// uses elsewhere. Sessions are persisted as a flat list (see
+// storeClient.getAutohuntSessions/saveAutohuntSessions) rather than on
+// the Character itself, so twitch.ts can discover all active sessions
+// without a "list every character" API. Only one session per username
+// at a time (enforced in commands.ts).
+// -----------------------------------------------------------------------
+export interface AutoHuntSession {
+  username: string;
+  channel: string;
+  startedAt: number;
+  endsAt: number;
+  intervalMs: number;
+  nextActionAt: number;
+  hunts: number;
+  wins: number;
+  losses: number;
+  totalXp: number;
+  totalGold: number;
+  levelsGained: number;
+}
+
+export const AutoHunt = {
+  DEFAULT_DURATION_MS: 15 * 60 * 1000, // 15 minutes
+  MIN_DURATION_MS: 5 * 60 * 1000,      // 5 minutes
+  MAX_DURATION_MS: 2 * 60 * 60 * 1000, // 2 hours
+  HUNT_INTERVAL_MS: 3 * 60 * 1000,     // a bout roughly every 3 minutes
+  HEAL_RESTORE_FRACTION: 0.8,          // same target !rest uses
+
+  // Parses "20m", "1h", "1h30m", or a bare number (minutes). Empty input
+  // means "use the default". Returns null if the input can't be parsed
+  // at all; otherwise clamps to [MIN_DURATION_MS, MAX_DURATION_MS].
+  parseDuration(raw: string): number | null {
+    const trimmed = raw.trim().toLowerCase();
+    if (!trimmed) return AutoHunt.DEFAULT_DURATION_MS;
+    if (/^\d+$/.test(trimmed)) {
+      return Util.clamp(parseInt(trimmed, 10) * 60 * 1000, AutoHunt.MIN_DURATION_MS, AutoHunt.MAX_DURATION_MS);
+    }
+    const match = trimmed.match(/^(?:(\d+)h)?(?:(\d+)m)?$/);
+    if (!match || (!match[1] && !match[2])) return null;
+    const hours = parseInt(match[1] || "0", 10);
+    const minutes = parseInt(match[2] || "0", 10);
+    const ms = (hours * 60 + minutes) * 60 * 1000;
+    if (ms <= 0) return null;
+    return Util.clamp(ms, AutoHunt.MIN_DURATION_MS, AutoHunt.MAX_DURATION_MS);
+  },
+
+  formatDuration(ms: number): string {
+    const totalMinutes = Math.max(1, Math.round(ms / 60000));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours && minutes) return hours + "h" + minutes + "m";
+    if (hours) return hours + "h";
+    return minutes + "m";
+  },
+
+  start(character: Character, channel: string, durationMs: number): AutoHuntSession {
+    const now = Date.now();
+    return {
+      username: character.username,
+      channel,
+      startedAt: now,
+      endsAt: now + durationMs,
+      intervalMs: AutoHunt.HUNT_INTERVAL_MS,
+      nextActionAt: now, // fire the first bout right away
+      hunts: 0, wins: 0, losses: 0, totalXp: 0, totalGold: 0, levelsGained: 0,
+    };
+  },
+
+  isDue(session: AutoHuntSession): boolean {
+    return Date.now() >= session.nextActionAt;
+  },
+
+  isExpired(session: AutoHuntSession): boolean {
+    return Date.now() >= session.endsAt;
+  },
+
+  // One tick against a freshly-loaded character. Mutates both the
+  // character and the session — caller saves both afterward. If HP is
+  // low, this rests instead of fighting (and reports monsterWon: null,
+  // so the caller knows not to touch quest progress this tick).
+  tick(character: Character, session: AutoHuntSession): { message: string; leveledTo: number | null; monsterWon: string | null } {
+    if (Advisor.isLowHp(character)) {
+      const target = Math.min(character.hpMax, Math.ceil(character.hpMax * AutoHunt.HEAL_RESTORE_FRACTION));
+      if (character.hp < target) {
+        character.hp = target;
+        session.nextActionAt = Date.now() + session.intervalMs;
+        return {
+          message: character.name + " breaks off to patch up, resting to " + character.hp + "/" + character.hpMax + " HP.",
+          leveledTo: null, monsterWon: null,
+        };
+      }
+    }
+    const result = Combat.huntMonster(character);
+    session.hunts++;
+    session.totalXp += result.xpGained;
+    session.totalGold += result.goldGained;
+    if (result.won) session.wins++; else session.losses++;
+    if (result.leveledTo) session.levelsGained++;
+    session.nextActionAt = Date.now() + session.intervalMs;
+    const highlight = result.log.slice(-3).join(", ");
+    const outcome = result.won
+      ? "felled a " + result.monster.name + " (" + highlight + ") — +" + result.xpGained + " XP, +" + result.goldGained + " gold."
+      : "was bested by a " + result.monster.name + " (" + highlight + ") but logged +" + result.xpGained + " XP for the effort.";
+    return {
+      message: character.name + " " + outcome + " HP " + character.hp + "/" + character.hpMax + ".",
+      leveledTo: result.leveledTo, monsterWon: result.won ? result.monster.name : null,
+    };
+  },
+
+  summary(character: Character, session: AutoHuntSession, stopReason: string): string {
+    const levelMsg = session.levelsGained
+      ? " 🎉 leveled up " + session.levelsGained + " time" + (session.levelsGained === 1 ? "" : "s") + "!"
+      : "";
+    return character.name + " wraps the autohunt after " + AutoHunt.formatDuration(Date.now() - session.startedAt) + " (" +
+      stopReason + "): " + session.hunts + " bout" + (session.hunts === 1 ? "" : "s") + " (" + session.wins + "W/" +
+      session.losses + "L), +" + session.totalXp + " XP, +" + session.totalGold + " gold. HP " + character.hp + "/" +
+      character.hpMax + "." + levelMsg;
+  },
+};
+
+// -----------------------------------------------------------------------
 // ItemLore — picks a random item currently on the merchant's stall and
 // spins a short ambient story about it, for the periodic "item lore" chat
 // event.
