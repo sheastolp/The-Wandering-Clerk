@@ -92,7 +92,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   await refreshAccessToken();
   let lastTokenRefreshAt = Date.now();
 
-  let ws: WebSocket;
+  let ws: WebSocket | undefined;
   let sessionId: string | null = null;
   let botUser: HelixUser | null = null;
   let lastChannelSyncAt = 0;
@@ -408,89 +408,145 @@ async function handleChatMessageEvent(event: any) {
     }
   }
 
-  async function onSessionReady() {
-    botUser = await getUser(BOT_USERNAME);
-    if (!botUser) {
-      console.error("Could not resolve the bot's own Twitch user id for", BOT_USERNAME);
-      return;
+  // Twitch ties every EventSub subscription to the specific WebSocket
+  // session that created it — when that socket closes, all of a channel's
+  // subscriptions go with it. So a reconnect within the same run has to
+  // recreate them against the new session id; it can skip re-resolving the
+  // bot's own user id and re-listing onboarded channels, since that's all
+  // still cached in botUser/channelUsers from the original connect.
+  async function subscribeKnownChannels(newSessionId: string) {
+    if (!botUser) return;
+    for (const [name, user] of channelUsers) {
+      const ok = await createChatMessageSubscription(user.id, botUser.id, newSessionId);
+      if (!ok) console.error(`Failed to resubscribe chat for #${name} after reconnect.`);
     }
-    const extraChannels = await Store.getChannels();
-    for (const channel of [HOME_CHANNEL, ...extraChannels]) {
-      const ok = await joinChannel(channel);
-      if (!ok) {
-        console.error(`Failed to subscribe to chat for #${channel} — has that broadcaster granted this Client ID the channel:bot permission?`);
+  }
+
+  async function onSessionReady(isReconnect: boolean) {
+    if (isReconnect) {
+      await subscribeKnownChannels(sessionId!);
+    } else {
+      botUser = await getUser(BOT_USERNAME);
+      if (!botUser) {
+        console.error("Could not resolve the bot's own Twitch user id for", BOT_USERNAME);
+        return;
+      }
+      const extraChannels = await Store.getChannels();
+      for (const channel of [HOME_CHANNEL, ...extraChannels]) {
+        const ok = await joinChannel(channel);
+        if (!ok) {
+          console.error(`Failed to subscribe to chat for #${channel} — has that broadcaster granted this Client ID the channel:bot permission?`);
+        }
       }
     }
     lastChannelSyncAt = Date.now();
     await maybePostPeriodicUpdates();
   }
 
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearInterval(budgetTimer);
-      resolve();
-    };
+  const DEFAULT_EVENTSUB_URL = "wss://eventsub.wss.twitch.tv/ws";
+  let nextConnectUrl: string | null = null;
+  let reconnectFailures = 0;
 
-    ws = new WebSocket("wss://eventsub.wss.twitch.tv/ws");
+  // Runs one WebSocket connection to completion and reports why it ended:
+  // "reconnect" for Twitch's own graceful session_reconnect handoff (which
+  // also captures the reconnect_url Twitch wants used for the next
+  // connection), or "closed" for anything else — a network blip, an idle
+  // timeout, a server-side error. Either way this resolves instead of
+  // ending the whole run; the caller decides whether/how fast to retry.
+  function connectOnce(url: string): Promise<"reconnect" | "closed"> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let pendingReconnectUrl: string | null = null;
+      const finishConn = (result: "reconnect" | "closed") => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
 
-    ws.onmessage = (rawEvent) => {
-      let msg: any;
-      try {
-        msg = JSON.parse(String(rawEvent.data));
-      } catch (err) {
-        console.error("Failed to parse EventSub message:", err);
-        return;
-      }
-      const type = msg.metadata?.message_type;
+      ws = new WebSocket(url);
 
-      if (type === "session_welcome") {
-        sessionId = msg.payload.session.id;
-        console.log("EventSub session established:", sessionId);
-        onSessionReady().catch((err) => console.error("onSessionReady error:", err));
-      } else if (type === "session_reconnect") {
-        console.log("EventSub asked us to reconnect — ending this run early; the next scheduled run will reconnect.");
-        try { ws.close(); } catch { /* ignore */ }
-      } else if (type === "notification") {
-        if (msg.metadata.subscription_type === "channel.chat.message") {
-          handleChatMessageEvent(msg.payload.event).catch((err) => console.error("handleChatMessageEvent error:", err));
+      ws.onmessage = (rawEvent) => {
+        let msg: any;
+        try {
+          msg = JSON.parse(String(rawEvent.data));
+        } catch (err) {
+          console.error("Failed to parse EventSub message:", err);
+          return;
         }
-      } else if (type === "revocation") {
-        console.warn("An EventSub subscription was revoked:", msg.payload);
-      }
-    };
+        const type = msg.metadata?.message_type;
 
-    ws.onclose = () => {
-      console.warn("EventSub connection closed; ending this run.");
-      finish();
-    };
+        if (type === "session_welcome") {
+          const isReconnect = sessionId !== null;
+          sessionId = msg.payload.session.id;
+          reconnectFailures = 0;
+          console.log(`EventSub session ${isReconnect ? "re-" : ""}established:`, sessionId);
+          onSessionReady(isReconnect).catch((err) => console.error("onSessionReady error:", err));
+        } else if (type === "session_reconnect") {
+          pendingReconnectUrl = msg.payload?.session?.reconnect_url || null;
+          console.log("EventSub asked us to reconnect — reconnecting within this run instead of ending it.");
+          try { ws?.close(); } catch { /* ignore */ }
+        } else if (type === "notification") {
+          if (msg.metadata.subscription_type === "channel.chat.message") {
+            handleChatMessageEvent(msg.payload.event).catch((err) => console.error("handleChatMessageEvent error:", err));
+          }
+        } else if (type === "revocation") {
+          console.warn("An EventSub subscription was revoked:", msg.payload);
+        }
+      };
 
-    ws.onerror = (err) => {
-      console.error("EventSub socket error:", err);
-    };
+      ws.onclose = () => {
+        if (pendingReconnectUrl) nextConnectUrl = pendingReconnectUrl;
+        finishConn(pendingReconnectUrl ? "reconnect" : "closed");
+      };
 
-    const budgetTimer = setInterval(async () => {
-      if (Date.now() >= deadline) {
-        try { ws.close(); } catch { /* ignore */ }
-        await drainOutbox();
-        finish();
-        return;
-      }
-      if (botUser && sessionId && Date.now() - lastChannelSyncAt >= CHANNEL_SYNC_MS) {
-        lastChannelSyncAt = Date.now();
-        syncChannels().catch((err) => console.error("syncChannels error:", err));
-        maybePostPeriodicUpdates().catch((err) => console.error("maybePostPeriodicUpdates error:", err));
-      }
-      if (Date.now() - lastAutohuntCheckAt >= AUTOHUNT_CHECK_MS) {
-        lastAutohuntCheckAt = Date.now();
-        processAutohuntSessions().catch((err) => console.error("processAutohuntSessions error:", err));
-      }
-      if (Date.now() - lastTokenRefreshAt >= TOKEN_REFRESH_MS) {
-        lastTokenRefreshAt = Date.now();
-        refreshAccessToken().catch((err) => console.error("proactive refreshAccessToken error:", err));
-      }
-    }, PERIODIC_CHECK_MS);
-  });
+      ws.onerror = (err) => {
+        // Just logged — the close event that (per the WebSocket spec)
+        // follows an error is what actually ends connectOnce and lets the
+        // retry loop below take over.
+        console.error("EventSub socket error:", err);
+      };
+    });
+  }
+
+  const budgetTimer = setInterval(() => {
+    if (Date.now() >= deadline) {
+      try { ws?.close(); } catch { /* ignore */ }
+      return;
+    }
+    if (botUser && sessionId && Date.now() - lastChannelSyncAt >= CHANNEL_SYNC_MS) {
+      lastChannelSyncAt = Date.now();
+      syncChannels().catch((err) => console.error("syncChannels error:", err));
+      maybePostPeriodicUpdates().catch((err) => console.error("maybePostPeriodicUpdates error:", err));
+    }
+    if (Date.now() - lastAutohuntCheckAt >= AUTOHUNT_CHECK_MS) {
+      lastAutohuntCheckAt = Date.now();
+      processAutohuntSessions().catch((err) => console.error("processAutohuntSessions error:", err));
+    }
+    if (Date.now() - lastTokenRefreshAt >= TOKEN_REFRESH_MS) {
+      lastTokenRefreshAt = Date.now();
+      refreshAccessToken().catch((err) => console.error("proactive refreshAccessToken error:", err));
+    }
+  }, PERIODIC_CHECK_MS);
+
+  try {
+    // Keep reconnecting for as long as this run's time budget allows,
+    // instead of letting any single dropped connection end the whole job —
+    // that's what used to make the bot go offline for up to 6 hours
+    // (until the next scheduled workflow run) over an ordinary blip.
+    while (Date.now() < deadline) {
+      const url = nextConnectUrl || DEFAULT_EVENTSUB_URL;
+      nextConnectUrl = null;
+      const result = await connectOnce(url);
+      if (Date.now() >= deadline) break;
+      if (result === "reconnect") continue; // Twitch-initiated, graceful — go again right away
+      reconnectFailures++;
+      const backoffMs = Math.min(30_000, 2_000 * 2 ** (reconnectFailures - 1));
+      console.warn(`EventSub connection dropped unexpectedly; reconnecting in ${Math.round(backoffMs / 1000)}s (attempt ${reconnectFailures}).`);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  } finally {
+    clearInterval(budgetTimer);
+    try { ws?.close(); } catch { /* ignore */ }
+    await drainOutbox();
+  }
 }
