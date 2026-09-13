@@ -1,31 +1,3 @@
-
-/
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Commands · TS
 // =============================================================================
 //  commands.ts — one async function per player-facing command. Each takes
 //  (username, display, args) and returns the reply string.
