@@ -11,14 +11,14 @@ import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
 import { roleFromBadges, isModOrBroadcaster, Badge } from "./permissions.ts";
 import { getUser, createChatMessageSubscription, sendChatMessage, refreshAccessToken, getLiveChannels, HelixUser } from "./helix.ts";
-
+ 
 const BOT_USERNAME = (Deno.env.get("TWITCH_BOT_USERNAME") || "").toLowerCase();
 const HOME_CHANNEL = (Deno.env.get("TWITCH_CHANNEL") || "").toLowerCase().replace(/^#/, "");
-
+ 
 if (!BOT_USERNAME || !HOME_CHANNEL) {
   console.error("Missing TWITCH_BOT_USERNAME or TWITCH_CHANNEL env vars.");
 }
-
+ 
 const COMMAND_DEFS: { name: keyof typeof Commands; triggers: string[] }[] = [
   { name: "help", triggers: ["!help"] },
   { name: "start", triggers: ["!start"] },
@@ -42,12 +42,12 @@ const COMMAND_DEFS: { name: keyof typeof Commands; triggers: string[] }[] = [
   { name: "lurk", triggers: ["!lurk"] },
   { name: "d20", triggers: ["!d20", "!roll"] },
 ];
-
+ 
 const triggerMap = new Map<string, keyof typeof Commands>();
 for (const def of COMMAND_DEFS) {
   for (const trigger of def.triggers) triggerMap.set(trigger, def.name);
 }
-
+ 
 // Which feature-flag section (see the /admin panel) gates each command.
 // Commands not listed here (!help, !start, the !clerk* admin commands) are
 // never gated.
@@ -69,30 +69,45 @@ const COMMAND_FEATURE: Partial<Record<keyof typeof Commands, string>> = {
   drop: "shop",
   sell: "shop",
   quests: "quests",
+  d20: "dice",
 };
-
-const ADMIN_TRIGGERS = new Set(["!clerkjoin", "!clerkleave", "!clerkchannels"]);
-
+ 
+const ADMIN_TRIGGERS = new Set(["!clerkjoin", "!clerkleave", "!clerkchannels", "!clerkadmin"]);
+ 
+// Base URL for the Val Town side (storage + onboarding + the gated /admin
+// panel) — hardcoded the same way commands.ts hardcodes GUIDE_URL, since
+// the GitHub Actions process has no other way to know it.
+const ADMIN_BASE_URL = "https://huntandhoardbot.val.run";
+ 
+// Pages that sit behind the Twitch sign-in gate on the Val Town side (see
+// main.ts's verifySession/isAuthorizedAdmin) — one link per row in
+// !clerkadmin's reply, scoped to whichever channel it's run in. A list
+// rather than a single hardcoded line, so a future gated page only needs
+// adding here.
+const GATED_PAGES: { label: string; path: string }[] = [
+  { label: "The Clerk's Back Room (feature toggles)", path: "/admin" },
+];
+ 
 const SEND_DELAY_MS = 1500;
 const PERIODIC_CHECK_MS = 10 * 1000; // how often we check "is it time to post an ad / sync channels / is the budget up"
 const CHANNEL_SYNC_MS = 3 * 60 * 1000; // how often to check for newly onboarded channels
-
+ 
 // Auto-announcement spacing (see maybePostPeriodicUpdates / channelReadyForAnnouncement):
 // a channel must see this many chat lines OR this much time pass since its
 // last auto-announcement before it's eligible for another one — of ANY of
 // the four types below. That shared gate is what keeps them from clumping.
 const CHANNEL_MIN_MESSAGES_BETWEEN_ANNOUNCEMENTS = 5;
 const CHANNEL_MIN_MS_BETWEEN_ANNOUNCEMENTS = 30 * 60 * 1000; // 30 minutes
-
+ 
 export async function runForWindow(budgetMs: number): Promise<void> {
   const deadline = Date.now() + budgetMs;
   const TOKEN_REFRESH_MS = 3 * 60 * 60 * 1000; // proactively refresh every 3h so a 4h token never expires mid-run
-
+ 
   // Get a known-fresh token before we even try to connect — the token
   // saved in secrets could easily be hours old by the time this run starts.
   await refreshAccessToken();
   let lastTokenRefreshAt = Date.now();
-
+ 
   let ws: WebSocket | undefined;
   let sessionId: string | null = null;
   let botUser: HelixUser | null = null;
@@ -105,7 +120,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   const channelLastAnnouncementAt = new Map<string, number>(); // when that channel last heard ANY auto-announcement
   const outbox: { channel: string; text: string }[] = [];
   let draining = false;
-
+ 
   function queueSay(channel: string, text: string) {
     const MAX = 480;
     if (text.length <= MAX) {
@@ -115,7 +130,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
     }
     drainOutbox();
   }
-
+ 
   async function drainOutbox() {
     if (draining) return;
     draining = true;
@@ -129,7 +144,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
     }
     draining = false;
   }
-
+ 
   async function joinChannel(loginName: string): Promise<boolean> {
     const name = loginName.toLowerCase();
     if (channelUsers.has(name)) return true;
@@ -141,22 +156,22 @@ export async function runForWindow(budgetMs: number): Promise<void> {
     channelUsers.set(name, user);
     return true;
   }
-
+ 
   function flagsFor(channel: string): Record<string, boolean> {
     return featureFlagsByChannel.get(channel) || {}; // empty map reads as "everything enabled" below
   }
-
+ 
   function channelReadyForAnnouncement(channel: string): boolean {
     const sinceLast = Date.now() - (channelLastAnnouncementAt.get(channel) || 0);
     const msgsSince = channelMsgCountSinceAnnouncement.get(channel) || 0;
     return msgsSince >= CHANNEL_MIN_MESSAGES_BETWEEN_ANNOUNCEMENTS || sinceLast >= CHANNEL_MIN_MS_BETWEEN_ANNOUNCEMENTS;
   }
-
+ 
   function recordChannelAnnouncement(channel: string) {
     channelMsgCountSinceAnnouncement.set(channel, 0);
     channelLastAnnouncementAt.set(channel, Date.now());
   }
-
+ 
   async function refreshFeatureFlags() {
     for (const channel of channelUsers.keys()) {
       try {
@@ -166,7 +181,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
       }
     }
   }
-
+ 
   async function handleGameCommand(channel: string, username: string, trigger: string, args: string[]) {
     const commandName = triggerMap.get(trigger);
     if (!commandName) return;
@@ -183,29 +198,37 @@ export async function runForWindow(budgetMs: number): Promise<void> {
       queueSay(channel, `@${username} the Clerk's quill slips and the ink smudges running ${trigger} — try again in a moment.`);
     }
   }
-
+ 
   async function handleAdminCommand(channel: string, username: string, badges: Badge[], trigger: string, args: string[]) {
     const role = roleFromBadges(badges);
     const allowed = isModOrBroadcaster(role);
-
+ 
     if (trigger === "!clerkchannels") {
       const channels = await Store.getChannels();
       const list = [HOME_CHANNEL, ...channels].join(", ");
       queueSay(channel, `@${username} the Clerk currently keeps ledgers open in: ${list}.`);
       return;
     }
-
+ 
     if (!allowed) {
       queueSay(channel, `@${username} only a moderator or the broadcaster may direct the Clerk's travels.`);
       return;
     }
-
+ 
+    if (trigger === "!clerkadmin") {
+      const links = GATED_PAGES
+        .map((p) => `${p.label}: ${ADMIN_BASE_URL}${p.path}?channel=${encodeURIComponent(channel)}`)
+        .join(" | ");
+      queueSay(channel, `@${username} sign in with Twitch to reach these — ${links}`);
+      return;
+    }
+ 
     const target = (args[0] || "").toLowerCase().replace(/^#/, "").trim();
     if (!target) {
       queueSay(channel, `@${username} to which town shall the Clerk travel? Try "${trigger} <channel name>".`);
       return;
     }
-
+ 
     if (trigger === "!clerkjoin") {
       if (target === HOME_CHANNEL || channelUsers.has(target)) {
         queueSay(channel, `@${username} the Clerk already keeps a ledger open in #${target}.`);
@@ -238,11 +261,11 @@ export async function runForWindow(budgetMs: number): Promise<void> {
       );
     }
   }
-
+ 
 async function handleChatMessageEvent(event: any) {
   const channel = (event.broadcaster_user_login || "").toLowerCase();
   const sourceChannel = (event.source_broadcaster_user_login || channel).toLowerCase();
-
+ 
   // Twitch Shared Chat: while this channel is in a shared-chat session with
   // another streamer, EventSub relays EVERY message in the combined feed to
   // us under broadcaster_user_login = this channel — even messages typed in
@@ -254,38 +277,38 @@ async function handleChatMessageEvent(event: any) {
   // delivers the same message with source === destination and handles it
   // there instead.
   if (sourceChannel !== channel) return;
-
+ 
   const username = (event.chatter_user_login || "").toLowerCase();
   const text = String(event.message?.text || "").trim();
   const badges: Badge[] = event.badges || [];
-
+ 
   if (!channel || !username) return;
   if (botUser && username === botUser.login.toLowerCase()) return;
-
+ 
   // Count every real chat line (not just commands) toward the per-channel
   // announcement-spacing gate — see channelReadyForAnnouncement().
   channelMsgCountSinceAnnouncement.set(channel, (channelMsgCountSinceAnnouncement.get(channel) || 0) + 1);
-
+ 
   if (!text.startsWith("!")) return;
-
+ 
   const [rawTrigger, ...args] = text.split(/\s+/);
   const trigger = rawTrigger.toLowerCase();
-
+ 
   if (ADMIN_TRIGGERS.has(trigger)) {
     await handleAdminCommand(channel, username, badges, trigger, args);
     return;
   }
   await handleGameCommand(channel, username, trigger, args);
 }
-
+ 
   async function maybePostPeriodicUpdates() {
     await refreshFeatureFlags();
-
+ 
     // Only the Clerk's unprompted, periodic lines are held back for
     // offline channels — a real !command from a lingering chatter still
     // gets a reply regardless of live status.
     const liveChannels = await getLiveChannels([...channelUsers.keys()]);
-
+ 
     // Sends `text` to every live channel that has `flagKey` enabled AND is
     // ready to hear another unprompted line (channelReadyForAnnouncement).
     // Shared across all four announcement types below — posting one kind
@@ -300,7 +323,7 @@ async function handleChatMessageEvent(event: any) {
         recordChannelAnnouncement(channel);
       }
     }
-
+ 
     // Fully rerolls the stall's offers on a jittered ~8-12 minute cadence
     // (matching the original codex script's Merchant.AD_INTERVAL_MS /
     // AD_JITTER_MS), rather than just advertising whatever's already there.
@@ -319,7 +342,7 @@ async function handleChatMessageEvent(event: any) {
       announceToChannels("merchant_ads", announcement);
       await Store.setMeta("last_merchant_restock_at", String(Date.now()));
     }
-
+ 
     const lastQuestRaw = await Store.getMeta("last_quest_refresh_at");
     const lastQuest = lastQuestRaw ? parseInt(lastQuestRaw, 10) : 0;
     if (Date.now() - lastQuest >= QuestBoard.BOARD_REFRESH_MS) {
@@ -331,7 +354,7 @@ async function handleChatMessageEvent(event: any) {
       announceToChannels("quest_ads", announcement);
       await Store.setMeta("last_quest_refresh_at", String(Date.now()));
     }
-
+ 
     // Ambient flavor: every ~12-18 minutes, the Clerk shares a little story
     // about one of the wares currently sitting on the stall.
     const lastStoryRaw = await Store.getMeta("last_item_story_at");
@@ -346,7 +369,7 @@ async function handleChatMessageEvent(event: any) {
       }
       await Store.setMeta("last_item_story_at", String(Date.now()));
     }
-
+ 
     // Gentle nudge for newcomers: every ~25-40 minutes, a soft reminder
     // that !start / !enlist exists, for anyone who's been lurking without
     // realizing there's a game going.
@@ -360,7 +383,7 @@ async function handleChatMessageEvent(event: any) {
       await Store.setMeta("last_start_nudge_at", String(Date.now()));
     }
   }
-
+ 
   // Checked on its own short cadence (independent of the 3-minute channel
   // sync) so timed autohunts fire close to their scheduled time without
   // waiting on the slower periodic-updates gate. Sessions are persisted
@@ -394,7 +417,7 @@ async function handleChatMessageEvent(event: any) {
     }
     if (changed) await Store.saveAutohuntSessions(remaining);
   }
-
+ 
   // Picks up channels onboarded via the one-click /onboard flow mid-run,
   // without waiting for the next scheduled workflow to start.
   async function syncChannels() {
@@ -408,7 +431,7 @@ async function handleChatMessageEvent(event: any) {
       }
     }
   }
-
+ 
   // Twitch ties every EventSub subscription to the specific WebSocket
   // session that created it — when that socket closes, all of a channel's
   // subscriptions go with it. So a reconnect within the same run has to
@@ -422,7 +445,7 @@ async function handleChatMessageEvent(event: any) {
       if (!ok) console.error(`Failed to resubscribe chat for #${name} after reconnect.`);
     }
   }
-
+ 
   async function onSessionReady(isReconnect: boolean) {
     if (isReconnect) {
       await subscribeKnownChannels(sessionId!);
@@ -443,11 +466,11 @@ async function handleChatMessageEvent(event: any) {
     lastChannelSyncAt = Date.now();
     await maybePostPeriodicUpdates();
   }
-
+ 
   const DEFAULT_EVENTSUB_URL = "wss://eventsub.wss.twitch.tv/ws";
   let nextConnectUrl: string | null = null;
   let reconnectFailures = 0;
-
+ 
   // Runs one WebSocket connection to completion and reports why it ended:
   // "reconnect" for Twitch's own graceful session_reconnect handoff (which
   // also captures the reconnect_url Twitch wants used for the next
@@ -463,9 +486,9 @@ async function handleChatMessageEvent(event: any) {
         settled = true;
         resolve(result);
       };
-
+ 
       ws = new WebSocket(url);
-
+ 
       ws.onmessage = (rawEvent) => {
         let msg: any;
         try {
@@ -475,7 +498,7 @@ async function handleChatMessageEvent(event: any) {
           return;
         }
         const type = msg.metadata?.message_type;
-
+ 
         if (type === "session_welcome") {
           const isReconnect = sessionId !== null;
           sessionId = msg.payload.session.id;
@@ -494,12 +517,12 @@ async function handleChatMessageEvent(event: any) {
           console.warn("An EventSub subscription was revoked:", msg.payload);
         }
       };
-
+ 
       ws.onclose = () => {
         if (pendingReconnectUrl) nextConnectUrl = pendingReconnectUrl;
         finishConn(pendingReconnectUrl ? "reconnect" : "closed");
       };
-
+ 
       ws.onerror = (err) => {
         // Just logged — the close event that (per the WebSocket spec)
         // follows an error is what actually ends connectOnce and lets the
@@ -508,7 +531,7 @@ async function handleChatMessageEvent(event: any) {
       };
     });
   }
-
+ 
   const budgetTimer = setInterval(() => {
     if (Date.now() >= deadline) {
       try { ws?.close(); } catch { /* ignore */ }
@@ -528,7 +551,7 @@ async function handleChatMessageEvent(event: any) {
       refreshAccessToken().catch((err) => console.error("proactive refreshAccessToken error:", err));
     }
   }, PERIODIC_CHECK_MS);
-
+ 
   try {
     // Keep reconnecting for as long as this run's time budget allows,
     // instead of letting any single dropped connection end the whole job —
@@ -551,3 +574,6 @@ async function handleChatMessageEvent(event: any) {
     await drainOutbox();
   }
 }
+ 
+
+
