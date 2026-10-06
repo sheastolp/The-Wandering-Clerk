@@ -163,6 +163,31 @@ async function setFeatureFlag(
   await setMeta("feature_flags", JSON.stringify(stored));
 }
 
+// Used by /admin/leave's purge option: forget a channel's toggles entirely,
+// so re-onboarding later starts from the defaults (everything on).
+async function removeFeatureFlags(channel: string): Promise<void> {
+  const raw = await getMeta("feature_flags");
+  if (!raw) return;
+  const stored = JSON.parse(raw);
+  if (!(channel in stored)) return;
+  delete stored[channel];
+  await setMeta("feature_flags", JSON.stringify(stored));
+}
+
+// Also for the purge option: cancel any timed !autohunt sessions running in
+// that channel (the bot keeps them as one flat list under this meta key —
+// see getAutohuntSessions in the bot's storeClient.ts).
+async function removeAutohuntSessions(channel: string): Promise<void> {
+  const raw = await getMeta("autohunt_sessions");
+  if (!raw) return;
+  const sessions = JSON.parse(raw) as { channel?: string }[];
+  const remaining = sessions.filter((s) =>
+    (s.channel || "").toLowerCase() !== channel
+  );
+  if (remaining.length === sessions.length) return;
+  await setMeta("autohunt_sessions", JSON.stringify(remaining));
+}
+
 // "Super admin" (you, or anyone in ADMIN_USERNAMES) can see and manage
 // every channel the Clerk serves. This check needs no storage lookup, so
 // it stays sync — callers that only need to know "is this a super admin"
@@ -331,13 +356,35 @@ function renderAdminDashboard(
       </tr>`;
   }).join("");
 
+  // Leave / purge — not offered for the home channel, which the bot always
+  // joins from its TWITCH_CHANNEL secret regardless of the stored list.
+  const leaveSection = currentChannel === HOME_CHANNEL ? "" : `
+    <div style="margin-top:40px;padding:16px 20px;border:1px solid #d9b3b3;border-radius:8px;background:#fcf5f5;">
+      <h2 style="margin:0 0 8px;font-size:1.1em;color:#7a2e2e;">Send the Clerk away from #${currentChannel}</h2>
+      <p style="margin:0 0 12px;color:#555;font-size:0.92em;">The Clerk stops replying in #${currentChannel} within a few minutes. You can bring it back any time with the <a href="/onboard">invite link</a>. Viewers' characters aren't touched — they follow each viewer to every channel the Clerk serves.</p>
+      <form method="POST" action="/admin/leave" style="margin:0;"
+        onsubmit="return confirm('Send the Clerk away from #${currentChannel}?');">
+        <input type="hidden" name="channel" value="${currentChannel}">
+        <label style="display:block;margin-bottom:10px;font-size:0.92em;">
+          <input type="checkbox" name="purge" value="1">
+          Also purge this channel's saved settings (the toggles above) and cancel any running timed <code>!autohunt</code> sessions here
+        </label>
+        <label style="display:block;margin-bottom:12px;font-size:0.92em;">
+          Type <strong>${currentChannel}</strong> to confirm:
+          <input name="confirm" autocomplete="off" required style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;">
+        </label>
+        <button type="submit" style="padding:8px 16px;background:#7a2e2e;color:white;border:none;border-radius:6px;cursor:pointer;">Leave #${currentChannel}</button>
+      </form>
+    </div>`;
+
   return adminPage(
     `<h1>The Clerk's Back Room</h1>` +
       `<p>Signed in as <strong>${login}</strong> — <a href="/admin/logout">sign out</a></p>` +
       `<p style="color:#555;margin-bottom:4px;">Settings for:</p>` +
       `<p style="margin-top:0;">${channelTabs}</p>` +
       `<table style="width:100%;border-collapse:collapse;margin-top:16px;">${rows}</table>` +
-      `<p style="color:#999;font-size:0.85em;margin-top:24px;">These settings apply only to <strong>#${currentChannel}</strong> — other channels the Clerk serves keep their own. Changes take effect within a few minutes.</p>`,
+      `<p style="color:#999;font-size:0.85em;margin-top:24px;">These settings apply only to <strong>#${currentChannel}</strong> — other channels the Clerk serves keep their own. Changes take effect within a few minutes.</p>` +
+      leaveSection,
   );
 }
 
@@ -762,6 +809,77 @@ export default async function (req: Request): Promise<Response> {
       status: 303,
       headers: { location: `/admin?channel=${encodeURIComponent(channel)}` },
     });
+  }
+
+  // Same lock-down as /admin/toggle: POST only, identity only from the
+  // verified session cookie (SameSite=Strict, so no cross-site POSTs), and
+  // a channel's own broadcaster may only remove their own channel.
+  if (path === "/admin/leave") {
+    if (req.method !== "POST") {
+      return adminPage(`<h1>Method not allowed</h1>`, 405);
+    }
+    const login = await verifySession(req);
+    if (!login) {
+      return adminPage(
+        `<h1>Session expired</h1><p>Please <a href="/admin">sign in again</a>.</p>`,
+        401,
+      );
+    }
+
+    const form = await req.formData();
+    const channel = String(form.get("channel") || "").toLowerCase();
+    const backLink = `<p><a href="/admin?channel=${
+      encodeURIComponent(channel)
+    }">Back to the Back Room</a></p>`;
+    if (channel === HOME_CHANNEL) {
+      return adminPage(
+        `<h1>That's the Clerk's home</h1><p>The home channel can't be removed from here.</p>${backLink}`,
+        400,
+      );
+    }
+    const extraChannels = await getChannels();
+    if (!extraChannels.includes(channel)) {
+      return adminPage(`<h1>Unknown channel</h1>${backLink}`, 400);
+    }
+    if (!isSuperAdmin(login) && channel !== login) {
+      return adminPage(`<h1>Not authorized for that channel</h1>`, 403);
+    }
+    const confirmed = String(form.get("confirm") || "").trim().toLowerCase()
+      .replace(/^#/, "");
+    if (confirmed !== channel) {
+      return adminPage(
+        `<h1>Nothing changed</h1><p>The confirmation didn't match <strong>${channel}</strong>, so the Clerk is staying put.</p>${backLink}`,
+        400,
+      );
+    }
+
+    const purge = String(form.get("purge")) === "1";
+    await removeChannel(channel);
+    if (purge) {
+      await removeFeatureFlags(channel);
+      await removeAutohuntSessions(channel);
+    }
+
+    const summary = `<h1>The Clerk has packed up its desk</h1>` +
+      `<p>The Clerk will stop replying in <strong>#${channel}</strong> within a few minutes.` +
+      (purge
+        ? ` Its saved settings for that channel have been purged and any timed hunts there cancelled.`
+        : ` Its settings for that channel are kept, in case you invite it back.`) +
+      `</p>`;
+    // A broadcaster who just removed their own channel is no longer on the
+    // allowlist (isAuthorizedAdmin), so end their session instead of
+    // bouncing them to a sign-in page that would refuse them.
+    if (!isSuperAdmin(login)) {
+      return adminPage(
+        summary +
+          `<p>Changed your mind? <a href="/onboard">Invite the Clerk back</a>.</p>`,
+        200,
+        { "set-cookie": clearSessionCookie() },
+      );
+    }
+    return adminPage(
+      summary + `<p><a href="/admin">Back to the Back Room</a></p>`,
+    );
   }
 
   // --- Step 1: broadcaster lands here and clicks the single "Authorize" button ---
