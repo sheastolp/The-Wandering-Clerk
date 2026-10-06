@@ -423,9 +423,21 @@ async function handleChatMessageEvent(event: any) {
   }
  
   // Picks up channels onboarded via the one-click /onboard flow mid-run,
-  // without waiting for the next scheduled workflow to start.
+  // without waiting for the next scheduled workflow to start — and drops
+  // channels removed from the store (the /admin panel's leave/purge, or
+  // !clerkleave from another channel) so the Clerk goes quiet there too.
   async function syncChannels() {
-    const extraChannels = await Store.getChannels();
+    const extraChannels = await Store.fetchChannels();
+    if (!extraChannels) return; // store unreachable: don't mistake that for "every channel left"
+    const wanted = new Set(extraChannels.map((c) => c.toLowerCase()));
+    for (const channel of [...channelUsers.keys()]) {
+      if (channel === HOME_CHANNEL || wanted.has(channel)) continue;
+      channelUsers.delete(channel);
+      featureFlagsByChannel.delete(channel);
+      channelMsgCountSinceAnnouncement.delete(channel);
+      channelLastAnnouncementAt.delete(channel);
+      console.log(`Left channel removed from the store: #${channel}`);
+    }
     for (const channel of extraChannels) {
       if (channelUsers.has(channel)) continue;
       const ok = await joinChannel(channel);

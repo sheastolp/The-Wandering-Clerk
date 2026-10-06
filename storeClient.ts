@@ -67,12 +67,24 @@ export async function saveMerchantOffers(offers: MerchantOffer[]): Promise<void>
 }
 
 export async function getChannels(): Promise<string[]> {
-  const res = await apiFetch(`/api/channels`);
-  if (!res.ok) {
-    console.error("getChannels failed:", res.status, await res.text());
-    return [];
+  return (await fetchChannels()) || [];
+}
+
+// Same as getChannels, but null on failure instead of [] — for callers that
+// must tell "no onboarded channels" apart from "couldn't reach the store"
+// (e.g. dropping channels that were left/purged from the /admin panel).
+export async function fetchChannels(): Promise<string[] | null> {
+  try {
+    const res = await apiFetch(`/api/channels`);
+    if (!res.ok) {
+      console.error("getChannels failed:", res.status, await res.text());
+      return null;
+    }
+    return await res.json();
+  } catch (err) {
+    console.error("getChannels failed:", err);
+    return null;
   }
-  return await res.json();
 }
 
 export async function addChannel(channel: string, addedBy: string): Promise<void> {
