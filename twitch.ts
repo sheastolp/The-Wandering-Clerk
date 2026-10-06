@@ -77,7 +77,11 @@ const ADMIN_TRIGGERS = new Set(["!clerkjoin", "!clerkleave", "!clerkchannels", "
 // Base URL for the Val Town side (storage + onboarding + the gated /admin
 // panel) — hardcoded the same way commands.ts hardcodes GUIDE_URL, since
 // the GitHub Actions process has no other way to know it.
-const ADMIN_BASE_URL = "https://hunt.tavernworks.dev";
+// Stays on the val.run host (not hunt.tavernworks.dev) because the Twitch
+// OAuth redirect_uri points at huntandhoardbot.val.run/admin/callback: the
+// sign-in state cookie is set on whichever host serves /admin, so starting
+// on the proxy domain leaves the callback without it and sign-in fails.
+const ADMIN_BASE_URL = "https://huntandhoardbot.val.run";
  
 // Pages that sit behind the Twitch sign-in gate on the Val Town side (see
 // main.ts's verifySession/isAuthorizedAdmin) — one link per row in
