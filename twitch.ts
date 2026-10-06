@@ -77,7 +77,7 @@ const ADMIN_TRIGGERS = new Set(["!clerkjoin", "!clerkleave", "!clerkchannels", "
 // Base URL for the Val Town side (storage + onboarding + the gated /admin
 // panel) — hardcoded the same way commands.ts hardcodes GUIDE_URL, since
 // the GitHub Actions process has no other way to know it.
-const ADMIN_BASE_URL = "https://huntandhoardbot.val.run";
+const ADMIN_BASE_URL = "https://tvernworks.dev";
  
 // Pages that sit behind the Twitch sign-in gate on the Val Town side (see
 // main.ts's verifySession/isAuthorizedAdmin) — one link per row in
