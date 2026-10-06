@@ -19,7 +19,7 @@ import {
 import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
  
-const GUIDE_URL = "https://tavernworks.dev/commands";
+const GUIDE_URL = "https://hunt.tavernworks.dev/commands";
  
 // Checks the current quest board for a bounty on `monsterName`, logs
 // `kills` toward it for this character, and auto turns it in (grants
