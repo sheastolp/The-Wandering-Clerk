@@ -1,14 +1,11 @@
 // =============================================================================
-//  main.ts (Val Town side) — this val handles two things, both quick
-//  request/response and well within Val Town's timeout:
+//  web.ts — the Clerk's web side, served by server.ts on the Yoga laptop
+//  (hunt.tavernworks.dev, through the Cloudflare Tunnel):
 //    1. The one-click broadcaster onboarding pages (/onboard, /oauth/callback)
-//    2. A small authenticated REST API over SQLite storage, used by the
-//       bot itself — which runs as a scheduled GitHub Actions workflow,
-//       not on Val Town, since Val Town can't hold a connection open long
-//       enough for a real-time chat bot without a paid plan.
+//    2. The moderator-locked /admin panel and the /commands guide
+//  The chat bot runs in the same process (see server.ts) and reads the same
+//  store.ts directly.
 // =============================================================================
-//
-//
 import {
   addChannel,
   deleteCharacter,
@@ -27,18 +24,12 @@ import {
 import { exchangeCodeForToken, getAuthorizingUser } from "./helix.ts";
 
 const CLIENT_ID = Deno.env.get("TWITCH_CLIENT_ID") || "";
-const API_SECRET = Deno.env.get("API_SHARED_SECRET") || "";
 const HOME_CHANNEL = (Deno.env.get("TWITCH_CHANNEL") || "").toLowerCase()
   .trim();
 const ADMIN_USERNAMES = (Deno.env.get("ADMIN_USERNAMES") || "")
   .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const ADMIN_SESSION_SECRET = Deno.env.get("ADMIN_SESSION_SECRET") || "";
 
-if (!API_SECRET) {
-  console.error(
-    "Missing API_SHARED_SECRET env var — the storage API will reject every request until this is set.",
-  );
-}
 if (!ADMIN_SESSION_SECRET) {
   console.error(
     "Missing ADMIN_SESSION_SECRET env var — the /admin panel will refuse to issue sessions until this is set.",
@@ -50,12 +41,7 @@ if (!HOME_CHANNEL) {
   );
 }
 
-const globalAny = globalThis as any;
-if (!globalAny.__huntAndHoardInit) {
-  globalAny.__huntAndHoardInit = true;
-  await initStore();
-  console.log("Hunt & Hoard storage + onboarding service ready.");
-}
+await initStore();
 
 function redirectUriFor(req: Request): string {
   const url = new URL(req.url);
@@ -662,18 +648,6 @@ function commandsGuidePage(): Response {
   });
 }
 
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function isAuthorized(req: Request): boolean {
-  return !!API_SECRET &&
-    req.headers.get("authorization") === `Bearer ${API_SECRET}`;
-}
-
 export default async function (req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/{2,}/g, "/");
@@ -937,79 +911,8 @@ export default async function (req: Request): Promise<Response> {
     );
   }
 
-  // --- Storage API for the GitHub Actions-hosted bot process ---
-  if (path.startsWith("/api/")) {
-    if (!isAuthorized(req)) return json({ error: "unauthorized" }, 401);
-
-    if (path === "/api/merchant") {
-      if (req.method === "GET") return json(await getMerchantOffers());
-      if (req.method === "PUT") {
-        await saveMerchantOffers(await req.json());
-        return json({ ok: true });
-      }
-    }
-
-    if (path === "/api/quests") {
-      if (req.method === "GET") return json(await getQuestBoard());
-      if (req.method === "PUT") {
-        await saveQuestBoard(await req.json());
-        return json({ ok: true });
-      }
-    }
-
-    if (path === "/api/channels") {
-      if (req.method === "GET") return json(await getChannels());
-      if (req.method === "POST") {
-        const body = await req.json();
-        await addChannel(body.channel, body.addedBy);
-        return json({ ok: true });
-      }
-    }
-
-    const channelMatch = path.match(/^\/api\/channels\/([^/]+)$/);
-    if (channelMatch && req.method === "DELETE") {
-      await removeChannel(decodeURIComponent(channelMatch[1]));
-      return json({ ok: true });
-    }
-
-    const charMatch = path.match(/^\/api\/characters\/([^/]+)$/);
-    if (charMatch) {
-      const username = decodeURIComponent(charMatch[1]);
-      if (req.method === "GET") {
-        const c = await getCharacter(username);
-        return c ? json(c) : json({ error: "not found" }, 404);
-      }
-      if (req.method === "PUT") {
-        await saveCharacter(await req.json());
-        return json({ ok: true });
-      }
-      if (req.method === "DELETE") {
-        await deleteCharacter(username);
-        return json({ ok: true });
-      }
-    }
-
-    const metaMatch = path.match(/^\/api\/meta\/([^/]+)$/);
-    if (metaMatch) {
-      const key = decodeURIComponent(metaMatch[1]);
-      if (req.method === "GET") {
-        const value = await getMeta(key);
-        return value === null
-          ? json({ error: "not found" }, 404)
-          : json({ value });
-      }
-      if (req.method === "PUT") {
-        const body = await req.json();
-        await setMeta(key, String(body.value));
-        return json({ ok: true });
-      }
-    }
-
-    return json({ error: "not found" }, 404);
-  }
-
   return new Response(
-    "GuildBreak: Hunt & Hoard storage + onboarding service is running.",
+    "The Wandering Clerk: Hunt & Hoard onboarding service is running.",
     {
       status: 200,
       headers: { "content-type": "text/plain" },

@@ -1,17 +1,4 @@
 // =============================================================================
-//  game.ts   —   ⚙️ GITHUB REPO COPY (sheastolp/The-Wandering-Clerk)
-//  Used by: commands.ts, twitch.ts (the live bot process)
-//  This is the FULL, ACTIVE copy — combat, the merchant, quests, item
-//  lore, passive HP regen, all of it. If you're editing game rules,
-//  balance numbers, or Advisor hints, this is the file that matters.
-//
-//  A second copy of this filename lives in the separate Val Town project
-//  (sheastolp's huntandhoardbot val) — that one is a trimmed-down,
-//  storage-only subset (just enough for type-checking store.ts and
-//  rolling default merchant/quest data on first run). The two are NOT
-//  auto-synced; changes here don't propagate there and vice versa. If
-//  you're not sure which one you're looking at, check this banner.
-// =============================================================================
 //  game.ts — all the stateless game math and rules. Nothing in here talks
 //  to Twitch or SQLite; it only operates on the plain objects below.
 // =============================================================================

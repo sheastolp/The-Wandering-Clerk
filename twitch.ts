@@ -2,8 +2,8 @@
 //  twitch.ts — connects to Twitch chat over EventSub WebSocket, dispatches
 //  !commands, and periodically posts merchant ads / quest board updates /
 //  checks for newly onboarded channels — all within one bounded time
-//  window (see runForWindow), since GitHub Actions kills any job after 6
-//  hours. bot.ts calls this once per scheduled workflow run.
+//  window (see runForWindow). server.ts calls it in a loop, so the bot
+//  reconnects once per window and otherwise stays up.
 // =============================================================================
 import { Commands, applyQuestProgress } from "./commands.ts";
 import { Merchant, ItemLore, AutoHunt, AutoHuntSession } from "./game.ts";
@@ -74,17 +74,14 @@ const COMMAND_FEATURE: Partial<Record<keyof typeof Commands, string>> = {
  
 const ADMIN_TRIGGERS = new Set(["!clerkjoin", "!clerkleave", "!clerkchannels", "!clerkadmin"]);
  
-// Base URL for the Val Town side (storage + onboarding + the gated /admin
-// panel) — hardcoded the same way commands.ts hardcodes GUIDE_URL, since
-// the GitHub Actions process has no other way to know it.
-// Stays on the val.run host (not hunt.tavernworks.dev) because the Twitch
-// OAuth redirect_uri points at huntandhoardbot.val.run/admin/callback: the
-// sign-in state cookie is set on whichever host serves /admin, so starting
-// on the proxy domain leaves the callback without it and sign-in fails.
-const ADMIN_BASE_URL = "https://huntandhoardbot.val.run";
+// Public address of the web side (web.ts: onboarding and the gated /admin
+// panel), used in !clerkadmin's links. Must be the same host Twitch's
+// OAuth redirect_uri points at (<PUBLIC_BASE_URL>/admin/callback), since the
+// sign-in state cookie is set on whichever host serves /admin.
+const ADMIN_BASE_URL = (Deno.env.get("PUBLIC_BASE_URL") || "https://hunt.tavernworks.dev").replace(/\/+$/, "");
  
-// Pages that sit behind the Twitch sign-in gate on the Val Town side (see
-// main.ts's verifySession/isAuthorizedAdmin) — one link per row in
+// Pages that sit behind the Twitch sign-in gate on the web side (see
+// web.ts's verifySession/isAuthorizedAdmin) — one link per row in
 // !clerkadmin's reply, scoped to whichever channel it's run in. A list
 // rather than a single hardcoded line, so a future gated page only needs
 // adding here.
