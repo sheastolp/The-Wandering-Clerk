@@ -14,7 +14,7 @@ One Deno process on the Yoga laptop at home (`deno task start`, which runs
 - **twitch.ts**: the chat bot over EventSub WebSocket, always connected.
 - **store.ts**: a local SQLite file (`DB_PATH`) both of them use.
 
-Settings live on the laptop in `~/.config/tavernworks/clerk.env` (see
+Settings live on the laptop in `/etc/tavernworks/clerk.env` (see
 `.env.example`). Pushing to `main` deploys: the laptop checks GitHub every few
 minutes, pulls, and restarts the bot.
 
