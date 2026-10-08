@@ -12,8 +12,8 @@
 // 2. That API has no "list every character" call, so characters are found
 //    by reading the val's SQLite tables over Val Town's API and keeping every
 //    row that holds a character sheet (a JSON object with username, race and
-//    cls). Add --file <export.sqlite> to read a downloaded copy of the val's
-//    database instead.
+//    cls), then Val Town blob storage the same way. Add --file <export.sqlite>
+//    to read a downloaded copy of the val's database instead.
 //
 // Nothing on Val Town is changed. Running it twice is safe (rows are upserted).
 
@@ -92,16 +92,28 @@ function valTownQuery(): Query | null {
   };
 }
 
+function isCharacter(o: any): o is Character {
+  return !!o && typeof o === "object" && typeof o.username === "string" && !!o.race && !!o.cls;
+}
+
 function asCharacter(v: unknown): Character | null {
   if (typeof v !== "string" || !v.startsWith("{")) return null;
   try {
     const o = JSON.parse(v);
-    return o && typeof o.username === "string" && o.race && o.cls ? (o as Character) : null;
+    return isCharacter(o) ? o : null;
   } catch {
     return null;
   }
 }
 
+/** Character sheets inside a parsed JSON value: the value itself, or the items/values of a list or map of them. */
+function charactersIn(v: unknown): Character[] {
+  if (isCharacter(v)) return [v];
+  const items = Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : [];
+  return items.filter(isCharacter);
+}
+
+let totalCharacters = 0;
 const query = file ? fileQuery(file) : valTownQuery();
 if (!query) {
   console.warn("No VAL_TOWN_API_KEY or --file: characters were not copied.");
@@ -127,11 +139,43 @@ if (!query) {
     }
   }
   console.log(`characters: ${found}`);
-  if (found === 0) {
-    console.warn(
-      "No character sheets found. The val may keep them somewhere this can't see (another database, or blob storage): " +
-        "spot-check a few with GET " + base + "/api/characters/<name> before switching the val off.",
-    );
+  totalCharacters += found;
+  if (found === 0) console.log("(none in the account database; checking blob storage next)");
+}
+// Val Town blob storage (std/blob), the other place a val keeps data.
+const blobKey = Deno.env.get("VAL_TOWN_API_KEY");
+if (blobKey) {
+  const auth = { Authorization: `Bearer ${blobKey}` };
+  const list = await fetch("https://api.val.town/v1/blob", { headers: auth });
+  if (!list.ok) {
+    console.warn(`Couldn't list Val Town blobs: HTTP ${list.status} ${await list.text()}`);
+  } else {
+    const blobs = (await list.json()) as { key: string; size?: number }[];
+    console.log(`blobs: ${blobs.length} (${blobs.map((b) => b.key).slice(0, 15).join(", ")}${blobs.length > 15 ? ", ..." : ""})`);
+    let fromBlobs = 0;
+    for (const b of blobs) {
+      if ((b.size ?? 0) > 20_000_000) continue;
+      const res = await fetch(`https://api.val.town/v1/blob/${encodeURIComponent(b.key)}`, { headers: auth });
+      if (!res.ok) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await res.text());
+      } catch {
+        continue;
+      }
+      for (const c of charactersIn(parsed)) {
+        await Store.saveCharacter(c);
+        fromBlobs++;
+      }
+    }
+    console.log(`characters from blobs: ${fromBlobs}`);
+    totalCharacters += fromBlobs;
   }
+}
+if (totalCharacters === 0) {
+  console.warn(
+    "No character sheets found. Don't switch the val off yet: check where its store.ts keeps them " +
+      "(spot-check one with GET " + base + "/api/characters/<name>).",
+  );
 }
 console.log(`Done: ${Store.DB_PATH}`);
