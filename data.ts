@@ -170,6 +170,8 @@ export const items: ItemDef[] = [
   { key: "tin_crown", name: "Tin Crown", type: "trinket", price: 12, desc: "makes you feel briefly regal" },
 ];
 
+// The road peddlers from the Grand Orrery's roster.md. orrery.ts swaps the
+// live names in at the start of every run; this list is only the fallback.
 export const merchantNames: string[] = [
   "Wobble", "Pruneface Yorik", "Tansy Ninefingers", "Old Corrin",
   "Tam Pockets", "Squint", "Nan Gullyfoot", "Kettle", "Sella Windrags",

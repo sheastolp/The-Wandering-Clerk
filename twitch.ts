@@ -10,6 +10,7 @@ import { Merchant, ItemLore, AutoHunt, AutoHuntSession } from "./game.ts";
 import { QuestBoard } from "./quests.ts";
 import * as Store from "./storeClient.ts";
 import { roleFromBadges, isModOrBroadcaster, Badge } from "./permissions.ts";
+import { refreshFromOrrery, refreshFromOrreryIfStale } from "./orrery.ts";
 import { getUser, createChatMessageSubscription, sendChatMessage, refreshAccessToken, getLiveChannels, HelixUser } from "./helix.ts";
  
 const BOT_USERNAME = (Deno.env.get("TWITCH_BOT_USERNAME") || "").toLowerCase();
@@ -111,6 +112,9 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   // saved in secrets could easily be hours old by the time this run starts.
   await refreshAccessToken();
   let lastTokenRefreshAt = Date.now();
+
+  // The road peddlers come from the Grand Orrery's roster.md (orrery.ts).
+  await refreshFromOrrery();
  
   let ws: WebSocket | undefined;
   let sessionId: string | null = null;
@@ -553,6 +557,7 @@ async function handleChatMessageEvent(event: any) {
       try { ws?.close(); } catch { /* ignore */ }
       return;
     }
+    refreshFromOrreryIfStale();
     if (botUser && sessionId && Date.now() - lastChannelSyncAt >= CHANNEL_SYNC_MS) {
       lastChannelSyncAt = Date.now();
       syncChannels().catch((err) => console.error("syncChannels error:", err));
