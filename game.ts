@@ -332,12 +332,12 @@ export const Merchant = {
   AD_JITTER_MS: 4 * 60 * 1000, // up to +4 minutes extra
 
   rollOffer(): MerchantOffer {
-    return { merchant: Util.pick(merchantNames), item: Util.pick(items), postedAt: Date.now() };
+    return { merchant: merchantNames.length ? Util.pick(merchantNames) : "A road peddler", item: Util.pick(items), postedAt: Date.now() };
   },
 
   rollOffers(): MerchantOffer[] {
     const picked = Util.sampleUnique(items, Merchant.SLOT_COUNT);
-    return picked.map((item) => ({ merchant: Util.pick(merchantNames), item, postedAt: Date.now() }));
+    return picked.map((item) => ({ merchant: merchantNames.length ? Util.pick(merchantNames) : "A road peddler", item, postedAt: Date.now() }));
   },
 
   pickAdOffer(currentOffers: MerchantOffer[] | null): MerchantOffer {

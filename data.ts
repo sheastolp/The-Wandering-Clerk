@@ -170,12 +170,9 @@ export const items: ItemDef[] = [
   { key: "tin_crown", name: "Tin Crown", type: "trinket", price: 12, desc: "makes you feel briefly regal" },
 ];
 
-// The road peddlers from the Grand Orrery's roster.md. orrery.ts swaps the
-// live names in at the start of every run; this list is only the fallback.
-export const merchantNames: string[] = [
-  "Wobble", "Pruneface Yorik", "Tansy Ninefingers", "Old Corrin",
-  "Tam Pockets", "Squint", "Nan Gullyfoot", "Kettle", "Sella Windrags",
-];
+// The road peddlers, from the Grand Orrery and nowhere else: orrery.ts fills
+// this in at the start of every run (or from the Orrery's last good list).
+export const merchantNames: string[] = [];
 
 // Story snippets for the periodic "item lore" ambient event (see twitch.ts).
 // Templated with {owner} (the merchant hawking it), {item} (item name), and

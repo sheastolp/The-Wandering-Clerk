@@ -1,54 +1,39 @@
 // The Wandering Clerk and the Grand Orrery: the Clerk's world comes from it.
 //
-// The Grand Orrery (github.com/sheastolp/grand-orrery) is the universe the
-// Clerk lives in. The Clerk is a guildscribe who broke from GuildScribe and
-// walks the road out to the Woodland Road, and the peddlers who follow that
-// road are the ones who hawk on the Clerk's stall. Their names come from the
-// Orrery's roster.md ("The road peddlers" table), read live from GitHub's
-// `main` branch at the start of each run and every 30 minutes after.
+// The Grand Orrery (github.com/sheastolp/grand-orrery) is the universe every
+// Tavernworks bot runs off. The peddlers who hawk on the Clerk's stall are
+// the Orrery's road peddlers: its people whose group is "The road peddlers",
+// read from the Orrery's database with the Orrery's own client at the start
+// of each run and every 30 minutes after.
 //
-// The Orrery is the source: rename or add a road peddler there and the
-// Clerk follows on the next check. data.ts's merchantNames is only the
-// fallback until the first good read, and if GitHub can't be reached the
-// last good list is kept. Nothing ever waits on it for more than 8 s.
+// The Clerk keeps no names of its own. The Orrery's last good list is saved
+// in the Clerk's store (meta "orrery-road-peddlers") and used when GitHub
+// can't be reached, so a new run still has the Orrery's names. Nothing ever
+// waits on it for more than 8 s.
 //
 // Settings (env):
-//   ORRERY=off           don't read the Orrery (the built-in names are used)
-//   ORRERY_BRANCH=main   the branch to read
-//   ORRERY_RAW_BASE=…    default https://raw.githubusercontent.com/sheastolp/grand-orrery/
+//   ORRERY=off           don't read the Orrery
+//   ORRERY_BRANCH=main   the branch's database to read
 
+import { Orrery } from "https://cdn.jsdelivr.net/gh/sheastolp/grand-orrery@d91122f2f80a0f98644f9c473142be268c9a9530/client/orrery.js";
 import { merchantNames } from "./data.ts";
+import { getMeta, setMeta } from "./storeClient.ts";
 
 const ENABLED = (Deno.env.get("ORRERY") ?? "on").toLowerCase() !== "off";
 const BRANCH = Deno.env.get("ORRERY_BRANCH") || "main";
-const RAW_BASE = (Deno.env.get("ORRERY_RAW_BASE") || "https://raw.githubusercontent.com/sheastolp/grand-orrery/").replace(/\/?$/, "/");
+const CACHE_KEY = "orrery-road-peddlers";
 export const ORRERY_REFRESH_MS = 30 * 60 * 1000;
 
-const cell = (c: string) => c.replace(/\*\*/g, "").replace(/\*/g, "").trim();
+type Person = { type: string; name: string; group?: string; status?: string };
 
-/** The names in roster.md's "**The road peddlers**" table, in order. */
-export function parseRoadPeddlers(md: string): string[] {
-  const names: string[] = [];
-  let inList = false;
-  let header = false;
-  for (const raw of md.replace(/\r/g, "").split("\n")) {
-    const line = raw.trim();
-    if (/^#{1,6}\s/.test(line)) { inList = false; continue; }
-    if (/^\*\*The road peddlers\*\*/i.test(line)) { inList = true; header = false; continue; }
-    if (!inList) continue;
-    if (!line.startsWith("|")) {
-      if (line && header) inList = false; // the table ended
-      continue;
-    }
-    const cells = line.replace(/^\||\|$/g, "").split("|").map(cell);
-    if (!header) { header = true; continue; }
-    if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
-    if (cells[0]) names.push(cells[0]);
-  }
-  return names;
+/** The Orrery's road peddlers, in roster order. */
+export function roadPeddlers(entities: Person[]): string[] {
+  return entities.filter((e) => e.type === "person" && e.group === "The road peddlers" && (e.status === "decided" || e.status === "dm-lore") && e.name).map((e) => e.name);
 }
 
 let lastRead = 0;
+let db: Orrery | null = null;
+const use = (names: string[]) => merchantNames.splice(0, merchantNames.length, ...names);
 
 /** Re-read the road peddlers from the Orrery and swap them into
  * merchantNames in place. Never throws. */
@@ -56,14 +41,27 @@ export async function refreshFromOrrery(): Promise<void> {
   if (!ENABLED) return;
   lastRead = Date.now();
   try {
-    const res = await fetch(`${RAW_BASE}${BRANCH}/roster.md`, { signal: AbortSignal.timeout(8_000) });
-    if (!res.ok) { await res.body?.cancel(); throw new Error(`HTTP ${res.status}`); }
-    const names = parseRoadPeddlers(await res.text());
-    if (!names.length) throw new Error("no road peddlers in roster.md");
-    merchantNames.splice(0, merchantNames.length, ...names);
-    console.log(`Orrery: ${names.length} road peddlers from roster.md`);
+    if (!db) {
+      db = new Orrery({ branch: BRANCH, refreshMinutes: 0, fetch: (u: string, i: RequestInit = {}) => fetch(u, { ...i, signal: AbortSignal.timeout(8_000) }) });
+      await db.ready();
+    } else await db.refresh();
+    const names = db.loaded ? roadPeddlers(db.list("person") as Person[]) : [];
+    if (names.length) {
+      use(names);
+      await setMeta(CACHE_KEY, JSON.stringify(names)).catch(() => {});
+      console.log(`Orrery: ${names.length} road peddlers`);
+      return;
+    }
+    throw new Error(db.lastError || "no road peddlers in the Orrery");
   } catch (e) {
-    console.error("Orrery: roster.md read failed, keeping the last names", String(e));
+    console.error("Orrery: read failed", String(e));
+    // The Orrery's last good list, from before this run.
+    if (!merchantNames.length) {
+      try {
+        const saved = JSON.parse((await getMeta(CACHE_KEY)) || "[]");
+        if (Array.isArray(saved) && saved.length) { use(saved.map(String)); console.log(`Orrery: ${saved.length} road peddlers from the last good read`); }
+      } catch { /* none saved */ }
+    }
   }
 }
 

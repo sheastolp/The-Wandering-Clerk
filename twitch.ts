@@ -113,7 +113,7 @@ export async function runForWindow(budgetMs: number): Promise<void> {
   await refreshAccessToken();
   let lastTokenRefreshAt = Date.now();
 
-  // The road peddlers come from the Grand Orrery's roster.md (orrery.ts).
+  // The road peddlers come from the Grand Orrery's database (orrery.ts).
   await refreshFromOrrery();
  
   let ws: WebSocket | undefined;
