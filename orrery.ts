@@ -15,12 +15,13 @@
 //   ORRERY=off           don't read the Orrery
 //   ORRERY_BRANCH=main   the branch's database to read
 
-import { Orrery } from "https://cdn.jsdelivr.net/gh/sheastolp/grand-orrery@d91122f2f80a0f98644f9c473142be268c9a9530/client/orrery.js";
+import { Orrery } from "https://cdn.jsdelivr.net/gh/sheastolp/grand-orrery@45c7741a590b29ba77f657881db19fea4553e5b6/client/orrery.js";
 import { merchantNames } from "./data.ts";
 import { getMeta, setMeta } from "./storeClient.ts";
 
 const ENABLED = (Deno.env.get("ORRERY") ?? "on").toLowerCase() !== "off";
 const BRANCH = Deno.env.get("ORRERY_BRANCH") || "main";
+const BASE_URL = Deno.env.get("ORRERY_BASE_URL") || "https://sheamus-tuf-gaming-fx705dt-fx705dt.tail2c8da4.ts.net:8443";  // the laptop host that serves the database; the client falls back to GitHub when it can't be reached
 const CACHE_KEY = "orrery-road-peddlers";
 export const ORRERY_REFRESH_MS = 30 * 60 * 1000;
 
@@ -42,7 +43,7 @@ export async function refreshFromOrrery(): Promise<void> {
   lastRead = Date.now();
   try {
     if (!db) {
-      db = new Orrery({ branch: BRANCH, refreshMinutes: 0, fetch: (u: string, i: RequestInit = {}) => fetch(u, { ...i, signal: AbortSignal.timeout(8_000) }) });
+      db = new Orrery({ baseUrl: BASE_URL, branch: BRANCH, refreshMinutes: 0, fetch: (u: string, i: RequestInit = {}) => fetch(u, { ...i, signal: AbortSignal.timeout(8_000) }) });
       await db.ready();
     } else await db.refresh();
     const names = db.loaded ? roadPeddlers(db.list("person") as Person[]) : [];
